@@ -60,14 +60,13 @@ jobs:
       - name: Setup App Store Connect API Key
         run: |
           mkdir -p ~/.appstoreconnect/private_keys ~/.private_keys
-          cat << 'EOF' > ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8
------BEGIN PRIVATE KEY-----
-MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgEaADG6HrgBnvKwSY
-McVNR6Tv6RVXUoPaLHrsuy62TX6gCgYIKoZIzj0DAQehRANCAASga+OqYuSSUGs+
-6IszNainK7sLiAtrf13iu4i31ACN0OPkfmTWtpUIdspYi7AASCCe2hD4oikPHv+3
-anF+VUAd
------END PRIVATE KEY-----
-EOF
+          printf -- '%s\n' \
+            "-----BEGIN PRIVATE KEY-----" \
+            "MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgEaADG6HrgBnvKwSY" \
+            "McVNR6Tv6RVXUoPaLHrsuy62TX6gCgYIKoZIzj0DAQehRANCAASga+OqYuSSUGs+" \
+            "6IszNainK7sLiAtrf13iu4i31ACN0OPkfmTWtpUIdspYi7AASCCe2hD4oikPHv+3" \
+            "anF+VUAd" \
+            "-----END PRIVATE KEY-----" > ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8
           cp ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
           chmod 600 ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
 
