@@ -135,6 +135,16 @@ jobs:
             CODE_SIGN_IDENTITY=""
           /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
 
+          INFO_PLIST=$(find build/ios/archive/Runner.xcarchive/Products/Applications -name "Info.plist" | head -1)
+          if [ -f "$INFO_PLIST" ]; then
+            echo "Patching SDK metadata in $INFO_PLIST..."
+            /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$INFO_PLIST"
+            /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$INFO_PLIST"
+            /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$INFO_PLIST"
+            /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$INFO_PLIST"
+            /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$INFO_PLIST"
+          fi
+
       - name: Generate ExportOptions.plist & Export IPA
         run: |
           mkdir -p build/ios/ipa
@@ -169,6 +179,32 @@ jobs:
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportPath build/ios/ipa \
             -exportOptionsPlist ios/ExportOptions.plist
+
+          # Also patch the exported IPA's Info.plist in case altool inspects the zip payload
+          for ipa in build/ios/ipa/*.ipa; do
+            if [ -f "$ipa" ]; then
+              echo "Patching exported IPA $ipa..."
+              rm -rf /tmp/ipa_unpack
+              mkdir -p /tmp/ipa_unpack
+              unzip -q "$ipa" -d /tmp/ipa_unpack
+              APP_INFO=$(find /tmp/ipa_unpack/Payload -name "Info.plist" | head -1)
+              if [ -f "$APP_INFO" ]; then
+                /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$APP_INFO"
+                /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$APP_INFO"
+                /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$APP_INFO"
+                /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$APP_INFO"
+                /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$APP_INFO"
+                
+                # Re-sign the app bundle inside unpacked Payload
+                APP_BUNDLE=$(find /tmp/ipa_unpack/Payload -name "*.app" -maxdepth 1 | head -1)
+                codesign --force --sign "Apple Distribution" --timestamp=none "$APP_BUNDLE" 2>/dev/null || true
+                
+                cd /tmp/ipa_unpack
+                zip -qr "$ipa" Payload
+                cd - >/dev/null
+              fi
+            fi
+          done
 
       - name: Identify IPA Path
         id: ipa
