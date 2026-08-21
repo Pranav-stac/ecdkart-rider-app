@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 60
     env:
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
-      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || '87CDJ95N5V' }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'BV3K2HZZN7' }}
       BUNDLE_ID: 'com.ecdkart.rider'
@@ -57,15 +57,9 @@ jobs:
       - name: Setup App Store Connect API Key
         run: |
           mkdir -p ~/.appstoreconnect/private_keys ~/.private_keys ~/Library/MobileDevice/Provisioning\ Profiles
-          printf -- '%s\n' \
-            "-----BEGIN PRIVATE KEY-----" \
-            "MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgEaADG6HrgBnvKwSY" \
-            "McVNR6Tv6RVXUoPaLHrsuy62TX6gCgYIKoZIzj0DAQehRANCAASga+OqYuSSUGs+" \
-            "6IszNainK7sLiAtrf13iu4i31ACN0OPkfmTWtpUIdspYi7AASCCe2hD4oikPHv+3" \
-            "anF+VUAd" \
-            "-----END PRIVATE KEY-----" > ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8
-          cp ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
-          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
+          printf -- '%s\n' "$APP_STORE_CONNECT_API_PRIVATE_KEY" > "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          cp "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8" "$HOME/.private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8" "$HOME/.private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
 
       - name: Import Apple Codesigning Certificate
         env:
@@ -196,5 +190,5 @@ jobs:
         with:
           app-path: ${{ steps.ipa.outputs.path }}
           issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
-          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || '87CDJ95N5V' }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           api-private-key: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
