@@ -1,0 +1,2 @@
+Download GoogleService-Info.plist from Firebase Console (ecdkart-24dbe, bundle com.ecdkart.rider) and place as:
+ios/Runner/GoogleService-Info.plist
