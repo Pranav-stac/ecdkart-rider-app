@@ -22,6 +22,14 @@ jobs:
     name: Build & Deploy to TestFlight
     runs-on: macos-14
     timeout-minutes: 60
+    env:
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'BV3K2HZZN7' }}
+      IOS_DISTRIBUTION_CERT_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_BASE64 }}
+      IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
 
     steps:
       - name: Checkout Code
@@ -40,16 +48,14 @@ jobs:
           cache: true
 
       - name: Import Apple Codesigning Certificate
-        if: ${{ secrets.IOS_DISTRIBUTION_CERT_BASE64 != '' && secrets.IOS_DISTRIBUTION_CERT_PASSWORD != '' }}
+        if: env.IOS_DISTRIBUTION_CERT_BASE64 != '' && env.IOS_DISTRIBUTION_CERT_PASSWORD != ''
         uses: apple-actions/import-codesign-certs@v3
         with:
           p12-file-base64: ${{ secrets.IOS_DISTRIBUTION_CERT_BASE64 }}
           p12-password: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
 
       - name: Install Provisioning Profile
-        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
-        env:
-          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        if: env.IOS_PROVISIONING_PROFILE_BASE64 != ''
         run: |
           set -euo pipefail
           PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
@@ -58,9 +64,7 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PP_PATH")")
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
 
-      - name: Disable Swift Package Manager & Configure Dependencies
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'BV3K2HZZN7' }}
+      - name: Configure CocoaPods & Xcode Signing
         run: |
           flutter config --no-enable-swift-package-manager
           flutter pub get
@@ -100,7 +104,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload to TestFlight
-        if: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APP_STORE_CONNECT_API_KEY_ID != '' && secrets.APP_STORE_CONNECT_API_PRIVATE_KEY != '' }}
+        if: env.APP_STORE_CONNECT_ISSUER_ID != '' && env.APP_STORE_CONNECT_API_KEY_ID != '' && env.APP_STORE_CONNECT_API_PRIVATE_KEY != ''
         uses: apple-actions/upload-testflight-build@v3
         with:
           app-path: ${{ steps.ipa.outputs.path }}
