@@ -1,20 +1,42 @@
-﻿default_platform(:ios)
+default_platform(:ios)
 
 platform :ios do
-  desc "Push a new beta build to TestFlight"
+  desc "Build, Sign, and Push to TestFlight"
   lane :beta do
     api_key = app_store_connect_api_key(
-      key_id: ENV["APP_STORE_CONNECT_KEY_ID"] || "87CDJ95N5V",
-      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
-      key_content: ENV["APP_STORE_CONNECT_KEY_CONTENT"],
-      is_key_content_base64: false,
+      key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"] || "87CDJ95N5V",
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"] || "655bf14b-54cb-4b8d-b335-15f5a9e48b9d",
+      key_filepath: "#{ENV['HOME']}/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8",
       in_house: false
+    )
+
+    get_certificates(
+      api_key: api_key,
+      development: false
+    )
+
+    get_provisioning_profile(
+      api_key: api_key,
+      app_identifier: ENV["BUNDLE_ID"],
+      force: true,
+      adhoc: false
+    )
+
+    build_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      clean: false,
+      skip_codesigning: true,
+      export_method: "app-store",
+      export_options: "ExportOptions.plist",
+      output_directory: "../build/ios/ipa",
+      output_name: "Runner.ipa"
     )
 
     upload_to_testflight(
       api_key: api_key,
-      skip_waiting_for_build_processing: true,
-      ipa: Dir["../build/ios/ipa/*.ipa"].first
+      ipa: "../build/ios/ipa/Runner.ipa",
+      skip_waiting_for_build_processing: true
     )
   end
 end

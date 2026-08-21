@@ -70,40 +70,6 @@ jobs:
           cp ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
           chmod 600 ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
 
-      - name: Import Apple Codesigning Certificate (if provided)
-        if: env.IOS_DISTRIBUTION_CERT_BASE64 != '' && env.IOS_DISTRIBUTION_CERT_PASSWORD != ''
-        uses: apple-actions/import-codesign-certs@v3
-        with:
-          p12-file-base64: ${{ secrets.IOS_DISTRIBUTION_CERT_BASE64 }}
-          p12-password: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
-
-      - name: Install Provisioning Profile (if provided)
-        if: env.IOS_PROVISIONING_PROFILE_BASE64 != ''
-        run: |
-          set -euo pipefail
-          PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
-          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PP_PATH"
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PP_PATH")")
-          cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
-
-      - name: Fetch Distribution Certificate & Provisioning Profile via Fastlane
-        run: |
-          gem install fastlane --no-document
-          fastlane run get_certificates \
-            api_key_path:"$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
-            api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
-            api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
-            development:false || true
-
-          fastlane run get_provisioning_profile \
-            api_key_path:"$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
-            api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
-            api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
-            app_identifier:"$BUNDLE_ID" \
-            force:true \
-            adhoc:false || true
-
       - name: Configure CocoaPods & Xcode Signing
         run: |
           flutter config --no-enable-swift-package-manager
@@ -126,25 +92,13 @@ jobs:
           echo "Building Flutter assets with: $BUILD_ARGS"
           flutter build ios $BUILD_ARGS
 
-      - name: Build & Export IPA via Fastlane Gym
+      - name: Build, Sign & Deploy to TestFlight via Fastlane
         run: |
+          gem install fastlane --no-document
           mkdir -p build/ios/ipa
-          fastlane gym \
-            --workspace "ios/Runner.xcworkspace" \
-            --scheme "Runner" \
-            --clean false \
-            --skip_codesigning true \
-            --export_method "app-store" \
-            --export_options "ios/ExportOptions.plist" \
-            --output_directory "build/ios/ipa" \
-            --output_name "Runner.ipa"
-
-      - name: Identify IPA Path
-        id: ipa
-        run: |
-          IPA_PATH=$(ls build/ios/ipa/*.ipa | head -1)
-          echo "Found IPA at: $IPA_PATH"
-          echo "path=$IPA_PATH" >> "$GITHUB_OUTPUT"
+          cd ios
+          fastlane beta
+          cd ..
 
       - name: Upload Build Artifact to GitHub
         uses: actions/upload-artifact@v4
@@ -153,11 +107,3 @@ jobs:
           name: ios-release-ipa
           path: build/ios/ipa/*.ipa
           if-no-files-found: ignore
-
-      - name: Upload to TestFlight
-        uses: apple-actions/upload-testflight-build@v3
-        with:
-          app-path: ${{ steps.ipa.outputs.path }}
-          issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
-          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || '87CDJ95N5V' }}
-          api-private-key: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
