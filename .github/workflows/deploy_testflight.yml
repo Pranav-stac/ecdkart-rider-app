@@ -87,13 +87,13 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
 
-      - name: Prepare Directories and Dependencies
+      - name: Prepare Dependencies and Configure Signing
         run: |
           mkdir -p build/ios/SourcePackages build/macos/SourcePackages build/ios build/macos
           flutter pub get
+          flutter build ios --config-only --release
           cd ios
           sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = ${APPLE_TEAM_ID};/g" Runner.xcodeproj/project.pbxproj 2>/dev/null || true
-          pod install --repo-update
           cd ..
 
       - name: Build Release IPA
