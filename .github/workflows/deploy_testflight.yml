@@ -88,7 +88,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k temp123 "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
-      - name: Download App Store Provisioning Profile via Fastlane
+      - name: Download and Install Provisioning Profile
         run: |
           gem install fastlane --no-document
           fastlane run get_provisioning_profile \
@@ -96,10 +96,20 @@ jobs:
             api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
             api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
             app_identifier:"$BUNDLE_ID" \
-            output_path:"$HOME/Library/MobileDevice/Provisioning Profiles" \
             force:true \
-            adhoc:false || true
-          cp *.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/" 2>/dev/null || true
+            adhoc:false
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          for f in *.mobileprovision; do
+            if [ -f "$f" ]; then
+              UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< $(security cms -D -i "$f"))
+              NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$f"))
+              echo "Installing profile '$NAME' with UUID '$UUID'..."
+              cp "$f" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+              echo "PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+              echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+            fi
+          done
 
       - name: Configure CocoaPods & Xcode Signing
         run: |
@@ -137,17 +147,40 @@ jobs:
             CODE_SIGN_IDENTITY=""
           /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
 
-      - name: Export IPA
+      - name: Generate ExportOptions.plist & Export IPA
         run: |
           mkdir -p build/ios/ipa
+          cat <<EOF > ios/ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${PROFILE_NAME}</string>
+            </dict>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+          cat ios/ExportOptions.plist
+
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/ExportOptions.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+            -exportOptionsPlist ios/ExportOptions.plist
 
       - name: Identify IPA Path
         id: ipa
