@@ -130,6 +130,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+          /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
 
       - name: Export IPA
         run: |
