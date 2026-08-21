@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -8,21 +9,35 @@ class LocationService {
 
   /// Check if location permission is granted
   static Future<bool> hasLocationPermission() async {
-    final status = await Permission.location.status;
-    return status.isGranted;
+    final permission = await Geolocator.checkPermission();
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
   }
 
-  /// Request location permission
+  /// Request location permission with automatic fallback
   static Future<bool> requestLocationPermission() async {
-    final status = await Permission.location.request();
-    
-    if (status.isPermanentlyDenied) {
-      // Open app settings if permanently denied
-      await openAppSettings();
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      await Geolocator.openLocationSettings();
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      await Geolocator.openAppSettings();
       return false;
     }
-    
-    return status.isGranted;
+
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
+  }
+
+  /// Direct method to open app settings
+  static Future<bool> openAppSettingsDirect() async {
+    return await Geolocator.openAppSettings();
   }
 
   /// Check if location service is enabled
@@ -33,20 +48,23 @@ class LocationService {
   /// Get current location once
   static Future<Position?> getCurrentLocation() async {
     try {
-      // Check if service is enabled
       final serviceEnabled = await isLocationServiceEnabled();
       if (!serviceEnabled) {
+        await Geolocator.openLocationSettings();
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.deniedForever) {
+        await Geolocator.openAppSettings();
+        return null;
+      }
+      if (permission == LocationPermission.denied) {
         return null;
       }
 
-      // Check permission
-      final hasPermission = await hasLocationPermission();
-      if (!hasPermission) {
-        final granted = await requestLocationPermission();
-        if (!granted) return null;
-      }
-
-      // Get current position
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
       );
@@ -54,7 +72,7 @@ class LocationService {
       _lastPosition = position;
       return position;
     } catch (e) {
-      print('Error getting location: $e');
+      debugPrint('Error getting location: $e');
       return null;
     }
   }
@@ -64,26 +82,25 @@ class LocationService {
     Function(Position)? onLocationUpdate,
   }) async {
     try {
-      // Check if service is enabled
       final serviceEnabled = await isLocationServiceEnabled();
       if (!serviceEnabled) {
+        await Geolocator.openLocationSettings();
+      }
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         return null;
       }
 
-      // Check permission
-      final hasPermission = await hasLocationPermission();
-      if (!hasPermission) {
-        final granted = await requestLocationPermission();
-        if (!granted) return null;
-      }
-
-      // Create location settings
       const locationSettings = LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 10, // Update every 10 meters
+        distanceFilter: 10,
       );
 
-      // Start listening to position stream
       final positionStream = Geolocator.getPositionStream(
         locationSettings: locationSettings,
       );
@@ -97,7 +114,7 @@ class LocationService {
 
       return positionStream;
     } catch (e) {
-      print('Error starting location updates: $e');
+      debugPrint('Error starting location updates: $e');
       return null;
     }
   }
@@ -108,7 +125,7 @@ class LocationService {
     _positionStreamSubscription = null;
   }
 
-  /// Get last known position (without requesting new one)
+  /// Get last known position
   static Position? getLastPosition() {
     return _lastPosition;
   }
