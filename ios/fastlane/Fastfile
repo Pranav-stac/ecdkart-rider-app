@@ -1,8 +1,7 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Build, Sign, and Push to TestFlight"
-  lane :beta do
+  lane :profile do
     key_file = "#{ENV['HOME']}/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8"
     key_content = File.exist?(key_file) ? File.read(key_file) : ENV["APP_STORE_CONNECT_API_PRIVATE_KEY"]
 
@@ -14,33 +13,11 @@ platform :ios do
       in_house: false
     )
 
-    get_certificates(
-      api_key: api_key,
-      development: false
-    )
-
     get_provisioning_profile(
       api_key: api_key,
       app_identifier: ENV["BUNDLE_ID"],
       force: true,
       adhoc: false
-    )
-
-    build_app(
-      workspace: "Runner.xcworkspace",
-      scheme: "Runner",
-      clean: false,
-      skip_codesigning: true,
-      export_method: "app-store",
-      export_options: "ExportOptions.plist",
-      output_directory: "../build/ios/ipa",
-      output_name: "Runner.ipa"
-    )
-
-    upload_to_testflight(
-      api_key: api_key,
-      ipa: "../build/ios/ipa/Runner.ipa",
-      skip_waiting_for_build_processing: true
     )
   end
 end

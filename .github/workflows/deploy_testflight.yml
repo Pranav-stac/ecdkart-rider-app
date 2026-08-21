@@ -91,24 +91,18 @@ jobs:
       - name: Download and Install Provisioning Profile
         run: |
           gem install fastlane --no-document
-          fastlane run get_provisioning_profile \
-            api_key_path:"$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
-            api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
-            api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
-            app_identifier:"$BUNDLE_ID" \
-            force:true \
-            adhoc:false
+          cd ios
+          fastlane profile
+          cd ..
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          for f in *.mobileprovision; do
-            if [ -f "$f" ]; then
-              UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< $(security cms -D -i "$f"))
-              NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$f"))
-              echo "Installing profile '$NAME' with UUID '$UUID'..."
-              cp "$f" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
-              echo "PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
-              echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
-            fi
+          find . -name "*.mobileprovision" | while read -r f; do
+            UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" /dev/stdin <<< $(security cms -D -i "$f"))
+            NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< $(security cms -D -i "$f"))
+            echo "Installing profile '$NAME' with UUID '$UUID' from $f..."
+            cp "$f" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+            echo "PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
+            echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
           done
 
       - name: Configure CocoaPods & Xcode Signing
