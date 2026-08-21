@@ -106,19 +106,41 @@ jobs:
           pod install --repo-update
           cd ..
 
-      - name: Build Release IPA
-        id: build_ipa
+      - name: Build Flutter iOS Assets (No Code Signing)
         env:
           INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          BUILD_ARGS="--release --export-options-plist=ios/ExportOptions.plist"
+          BUILD_ARGS="--release --no-codesign"
           if [ -n "$INPUT_BUILD_NUMBER" ]; then
             BUILD_ARGS="$BUILD_ARGS --build-number=$INPUT_BUILD_NUMBER"
           elif [ -n "${{ github.run_number }}" ]; then
             BUILD_ARGS="$BUILD_ARGS --build-number=${{ github.run_number }}"
           fi
-          echo "Building IPA with: $BUILD_ARGS"
-          flutter build ipa $BUILD_ARGS
+          echo "Building Flutter assets with: $BUILD_ARGS"
+          flutter build ios $BUILD_ARGS
+
+      - name: Xcode Archive (No Code Signing Required)
+        run: |
+          xcodebuild archive \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Export IPA
+        run: |
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          xcodebuild -exportArchive \
+            -archivePath build/ios/archive/Runner.xcarchive \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
 
       - name: Identify IPA Path
         id: ipa
