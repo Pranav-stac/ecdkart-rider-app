@@ -133,15 +133,9 @@ jobs:
             --workspace "ios/Runner.xcworkspace" \
             --scheme "Runner" \
             --clean false \
+            --skip_codesigning true \
             --export_method "app-store" \
             --export_options "ios/ExportOptions.plist" \
-            --output_directory "build/ios/ipa" \
-            --output_name "Runner.ipa" || \
-          fastlane gym \
-            --workspace "ios/Runner.xcworkspace" \
-            --scheme "Runner" \
-            --clean false \
-            --export_method "app-store" \
             --output_directory "build/ios/ipa" \
             --output_name "Runner.ipa"
 
