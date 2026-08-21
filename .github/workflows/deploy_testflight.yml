@@ -134,9 +134,9 @@ jobs:
             -configuration Release \
             -archivePath build/ios/archive/Runner.xcarchive \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
           /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
 
       - name: Generate ExportOptions.plist & Export IPA
@@ -188,7 +188,9 @@ jobs:
               APP_BUNDLE=$(find /tmp/ipa_unpack/Payload -name "*.app" -maxdepth 1 | head -1)
               APP_EXECUTABLE=$(find "$APP_BUNDLE" -maxdepth 1 -type f -perm +111 -not -name "*.dylib" | head -1)
 
-              # Extract exact XML entitlements
+              # Extract the exact entitlements embedded by xcodebuild -exportArchive
+              security cms -D -i "$APP_BUNDLE/embedded.mobileprovision" > /tmp/profile.plist 2>/dev/null || true
+              /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/profile.plist > /tmp/entitlements.xml 2>/dev/null || \
               codesign -d --entitlements :/tmp/entitlements.xml --xml "$APP_BUNDLE" 2>/dev/null || true
 
               find /tmp/ipa_unpack/Payload -name "Info.plist" | while read -r plist; do
@@ -206,7 +208,6 @@ jobs:
 
               find "$APP_BUNDLE/Frameworks" -type f 2>/dev/null | while read -r bin; do
                 if file "$bin" | grep -q "Mach-O"; then
-                  echo "Patching framework binary $bin with vtool..."
                   xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$bin" "$bin" 2>/dev/null || true
                 fi
               done
@@ -216,7 +217,7 @@ jobs:
               done
 
               if [ -f "/tmp/entitlements.xml" ] && [ -s "/tmp/entitlements.xml" ]; then
-                echo "Re-signing $APP_BUNDLE with extracted entitlements..."
+                echo "Re-signing $APP_BUNDLE with entitlements from mobileprovision..."
                 codesign --force --sign "Apple Distribution" --entitlements /tmp/entitlements.xml --preserve-metadata=identifier,flags "$APP_BUNDLE"
               else
                 echo "Re-signing $APP_BUNDLE with preserved entitlements..."
