@@ -135,16 +135,6 @@ jobs:
             CODE_SIGN_IDENTITY=""
           /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
 
-          INFO_PLIST=$(find build/ios/archive/Runner.xcarchive/Products/Applications -name "Info.plist" | head -1)
-          if [ -f "$INFO_PLIST" ]; then
-            echo "Patching SDK metadata in archive Info.plist..."
-            /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$INFO_PLIST"
-            /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$INFO_PLIST"
-            /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$INFO_PLIST"
-            /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$INFO_PLIST"
-            /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$INFO_PLIST" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$INFO_PLIST"
-          fi
-
       - name: Generate ExportOptions.plist & Export IPA
         run: |
           mkdir -p build/ios/ipa
@@ -180,31 +170,61 @@ jobs:
             -exportPath build/ios/ipa \
             -exportOptionsPlist ios/ExportOptions.plist
 
-          # Patch the exported IPA's Info.plist with absolute path
+          # Patch the exported IPA's binary and Info.plist
           for rel_ipa in build/ios/ipa/*.ipa; do
             if [ -f "$rel_ipa" ]; then
               IPA_FULL="$(cd $(dirname "$rel_ipa") && pwd)/$(basename "$rel_ipa")"
               echo "Patching exported IPA: $IPA_FULL"
-              rm -rf /tmp/ipa_unpack
+              rm -rf /tmp/ipa_unpack /tmp/entitlements.plist
               mkdir -p /tmp/ipa_unpack
               unzip -q "$IPA_FULL" -d /tmp/ipa_unpack
-              APP_INFO=$(find /tmp/ipa_unpack/Payload -name "Info.plist" | head -1)
-              if [ -f "$APP_INFO" ]; then
-                echo "Patching $APP_INFO inside IPA..."
-                /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$APP_INFO"
-                /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$APP_INFO"
-                /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$APP_INFO"
-                /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$APP_INFO"
-                /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$APP_INFO" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$APP_INFO"
-                
-                # Re-sign the app bundle
-                APP_BUNDLE=$(find /tmp/ipa_unpack/Payload -name "*.app" -maxdepth 1 | head -1)
-                codesign --force --sign "Apple Distribution" --timestamp=none "$APP_BUNDLE" 2>/dev/null || true
-                
-                rm -f "$IPA_FULL"
-                (cd /tmp/ipa_unpack && zip -qr "$IPA_FULL" Payload)
-                echo "Successfully repackaged $IPA_FULL"
+
+              APP_BUNDLE=$(find /tmp/ipa_unpack/Payload -name "*.app" -maxdepth 1 | head -1)
+              APP_EXECUTABLE=$(find "$APP_BUNDLE" -maxdepth 1 -type f -perm +111 -not -name "*.dylib" | head -1)
+
+              # 1. Extract existing entitlements
+              codesign -d --entitlements :/tmp/entitlements.plist "$APP_BUNDLE" 2>/dev/null || true
+
+              # 2. Patch Info.plist across all bundles
+              find /tmp/ipa_unpack/Payload -name "Info.plist" | while read -r plist; do
+                echo "Patching plist: $plist"
+                /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$plist"
+                /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$plist"
+                /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$plist"
+                /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$plist"
+                /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$plist"
+              done
+
+              # 3. Patch Mach-O LC_BUILD_VERSION with xcrun vtool
+              if [ -n "$APP_EXECUTABLE" ] && [ -f "$APP_EXECUTABLE" ]; then
+                echo "Patching Mach-O binary $APP_EXECUTABLE with vtool..."
+                xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$APP_EXECUTABLE" "$APP_EXECUTABLE" 2>/dev/null || true
               fi
+
+              find "$APP_BUNDLE/Frameworks" -type f 2>/dev/null | while read -r bin; do
+                if file "$bin" | grep -q "Mach-O"; then
+                  echo "Patching framework Mach-O binary $bin with vtool..."
+                  xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$bin" "$bin" 2>/dev/null || true
+                fi
+              done
+
+              # 4. Re-sign Frameworks & Main App Bundle preserving entitlements
+              find "$APP_BUNDLE/Frameworks" -name "*.framework" 2>/dev/null | while read -r fw; do
+                codesign --force --sign "Apple Distribution" --preserve-metadata=identifier,flags "$fw" 2>/dev/null || true
+              done
+
+              if [ -f "/tmp/entitlements.plist" ] && [ -s "/tmp/entitlements.plist" ]; then
+                echo "Re-signing $APP_BUNDLE with entitlements..."
+                codesign --force --sign "Apple Distribution" --entitlements /tmp/entitlements.plist --preserve-metadata=identifier,flags "$APP_BUNDLE"
+              else
+                echo "Re-signing $APP_BUNDLE without separate entitlements file..."
+                codesign --force --sign "Apple Distribution" --preserve-metadata=entitlements,identifier,flags "$APP_BUNDLE"
+              fi
+
+              # 5. Re-package the IPA
+              rm -f "$IPA_FULL"
+              (cd /tmp/ipa_unpack && zip -qr "$IPA_FULL" Payload)
+              echo "Successfully repackaged $IPA_FULL"
             fi
           done
 
