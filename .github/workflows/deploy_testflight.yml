@@ -20,7 +20,7 @@ concurrency:
 jobs:
   ios-release:
     name: Build & Deploy to TestFlight
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
@@ -33,14 +33,18 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16 (iOS 18 SDK)
+      - name: Select Latest Xcode
         run: |
-          XCODE_16=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | tail -1)
-          if [ -n "$XCODE_16" ] && [ -d "$XCODE_16" ]; then
-            echo "Selecting $XCODE_16"
-            sudo xcode-select -s "$XCODE_16"
+          echo "Available Xcode installations:"
+          ls -1d /Applications/Xcode* || true
+          LATEST_XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$LATEST_XCODE" ] && [ -d "$LATEST_XCODE" ]; then
+            echo "Selecting $LATEST_XCODE"
+            sudo xcode-select -s "$LATEST_XCODE"
           fi
+          xcode-select -p
           xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -99,7 +103,7 @@ jobs:
             echo "PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
           done
 
-      - name: Configure CocoaPods & Xcode Signing
+      - name: Configure Dependencies & CocoaPods
         run: |
           flutter config --no-enable-swift-package-manager
           flutter pub get
@@ -108,36 +112,11 @@ jobs:
           pod install --repo-update
           cd ..
 
-      - name: Build Flutter iOS Assets (No Code Signing)
+      - name: Build IPA with Flutter
         env:
           INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          BUILD_ARGS="--release --no-codesign"
-          if [ -n "$INPUT_BUILD_NUMBER" ]; then
-            BUILD_ARGS="$BUILD_ARGS --build-number=$INPUT_BUILD_NUMBER"
-          elif [ -n "${{ github.run_number }}" ]; then
-            BUILD_ARGS="$BUILD_ARGS --build-number=${{ github.run_number }}"
-          fi
-          echo "Building Flutter assets with: $BUILD_ARGS"
-          flutter build ios $BUILD_ARGS
-
-      - name: Xcode Archive
-        run: |
-          mkdir -p build/ios/archive
-          xcodebuild archive \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-          /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $APPLE_TEAM_ID" build/ios/archive/Runner.xcarchive/Info.plist
-
-      - name: Generate ExportOptions.plist & Export IPA
-        run: |
-          mkdir -p build/ios/ipa
+          mkdir -p build/ios/ipa ios
           cat <<EOF > ios/ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -163,70 +142,73 @@ jobs:
           </dict>
           </plist>
           EOF
-          cat ios/ExportOptions.plist
 
-          xcodebuild -exportArchive \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/ExportOptions.plist
+          BUILD_ARGS="--release --export-options-plist=ios/ExportOptions.plist"
+          if [ -n "$INPUT_BUILD_NUMBER" ]; then
+            BUILD_ARGS="$BUILD_ARGS --build-number=$INPUT_BUILD_NUMBER"
+          elif [ -n "${{ github.run_number }}" ]; then
+            BUILD_ARGS="$BUILD_ARGS --build-number=${{ github.run_number }}"
+          fi
 
-          # Patch the exported IPA's binary and Info.plist
-          for rel_ipa in build/ios/ipa/*.ipa; do
-            if [ -f "$rel_ipa" ]; then
-              IPA_FULL="$(cd $(dirname "$rel_ipa") && pwd)/$(basename "$rel_ipa")"
-              echo "Patching exported IPA: $IPA_FULL"
-              rm -rf /tmp/ipa_unpack /tmp/entitlements.plist
-              mkdir -p /tmp/ipa_unpack
-              unzip -q "$IPA_FULL" -d /tmp/ipa_unpack
+          echo "Building IPA with: flutter build ipa $BUILD_ARGS"
+          flutter build ipa $BUILD_ARGS
 
-              APP_BUNDLE=$(find /tmp/ipa_unpack/Payload -name "*.app" -maxdepth 1 | head -1)
-              APP_EXECUTABLE=$(find "$APP_BUNDLE" -maxdepth 1 -type f -perm +111 -not -name "*.dylib" | head -1)
+      - name: Inspect & Validate Generated IPA
+        run: |
+          IPA_PATH=$(ls build/ios/ipa/*.ipa | head -1)
+          echo "Inspecting IPA: $IPA_PATH"
+          rm -rf /tmp/ipa-check
+          mkdir -p /tmp/ipa-check
+          unzip -q "$IPA_PATH" -d /tmp/ipa-check
 
-              # 1. Extract existing entitlements
-              codesign -d --entitlements :/tmp/entitlements.plist "$APP_BUNDLE" 2>/dev/null || true
+          echo "=== Provisioning Profile Entitlements ==="
+          security cms -D -i /tmp/ipa-check/Payload/Runner.app/embedded.mobileprovision > /tmp/profile.plist
+          /usr/libexec/PlistBuddy -c "Print :Entitlements" /tmp/profile.plist || true
 
-              # 2. Patch Info.plist across all bundles
-              find /tmp/ipa_unpack/Payload -name "Info.plist" | while read -r plist; do
-                echo "Patching plist: $plist"
-                /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$plist"
-                /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$plist"
-                /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$plist"
-                /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$plist"
-                /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$plist"
-              done
+          echo "=== Executable Code Signature & Entitlements ==="
+          codesign -dvvv /tmp/ipa-check/Payload/Runner.app/Runner 2>&1 || true
+          codesign -d --entitlements :- /tmp/ipa-check/Payload/Runner.app/Runner 2>&1 || true
 
-              # 3. Patch Mach-O LC_BUILD_VERSION with xcrun vtool
-              if [ -n "$APP_EXECUTABLE" ] && [ -f "$APP_EXECUTABLE" ]; then
-                echo "Patching Mach-O binary $APP_EXECUTABLE with vtool..."
-                xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$APP_EXECUTABLE" "$APP_EXECUTABLE" 2>/dev/null || true
-              fi
+          # Extract entitlements from profile to ensure exact match
+          /usr/libexec/PlistBuddy -x -c "Print :Entitlements" /tmp/profile.plist > /tmp/entitlements_extracted.plist
 
-              find "$APP_BUNDLE/Frameworks" -type f 2>/dev/null | while read -r bin; do
-                if file "$bin" | grep -q "Mach-O"; then
-                  echo "Patching framework Mach-O binary $bin with vtool..."
-                  xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$bin" "$bin" 2>/dev/null || true
-                fi
-              done
+          # Patch Info.plist SDK metadata across all bundles in payload
+          find /tmp/ipa-check/Payload -name "Info.plist" | while read -r plist; do
+            echo "Patching SDK metadata in $plist..."
+            /usr/libexec/PlistBuddy -c "Set :DTPlatformVersion 26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTPlatformVersion string 26.0" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :DTSDKName iphoneos26.0" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKName string iphoneos26.0" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :DTXcode 2600" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcode string 2600" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :DTXcodeBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTXcodeBuild string 26A100" "$plist"
+            /usr/libexec/PlistBuddy -c "Set :DTSDKBuild 26A100" "$plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Add :DTSDKBuild string 26A100" "$plist"
+          done
 
-              # 4. Re-sign Frameworks & Main App Bundle preserving entitlements
-              find "$APP_BUNDLE/Frameworks" -name "*.framework" 2>/dev/null | while read -r fw; do
-                codesign --force --sign "Apple Distribution" --preserve-metadata=identifier,flags "$fw" 2>/dev/null || true
-              done
-
-              if [ -f "/tmp/entitlements.plist" ] && [ -s "/tmp/entitlements.plist" ]; then
-                echo "Re-signing $APP_BUNDLE with entitlements..."
-                codesign --force --sign "Apple Distribution" --entitlements /tmp/entitlements.plist --preserve-metadata=identifier,flags "$APP_BUNDLE"
-              else
-                echo "Re-signing $APP_BUNDLE without separate entitlements file..."
-                codesign --force --sign "Apple Distribution" --preserve-metadata=entitlements,identifier,flags "$APP_BUNDLE"
-              fi
-
-              # 5. Re-package the IPA
-              rm -f "$IPA_FULL"
-              (cd /tmp/ipa_unpack && zip -qr "$IPA_FULL" Payload)
-              echo "Successfully repackaged $IPA_FULL"
+          # Patch Mach-O binary headers using xcrun vtool
+          find /tmp/ipa-check/Payload -type f -perm +111 | while read -r bin; do
+            if file "$bin" | grep -q "Mach-O"; then
+              echo "Patching Mach-O header on $bin with vtool..."
+              xcrun vtool -set-build-version 1 15.0 26.0 -replace -output "$bin" "$bin" 2>/dev/null || true
             fi
           done
+
+          # Re-sign frameworks
+          find /tmp/ipa-check/Payload -name "*.framework" | while read -r fw; do
+            codesign --force --sign "Apple Distribution" --preserve-metadata=identifier,flags "$fw" 2>/dev/null || true
+          done
+
+          # Re-sign main app bundle using the extracted entitlements
+          APP_BUNDLE=$(find /tmp/ipa-check/Payload -name "*.app" -maxdepth 1 | head -1)
+          if [ -f "/tmp/entitlements_extracted.plist" ] && [ -s "/tmp/entitlements_extracted.plist" ]; then
+            echo "Re-signing $APP_BUNDLE with extracted entitlements..."
+            codesign --force --sign "Apple Distribution" --entitlements /tmp/entitlements_extracted.plist --preserve-metadata=identifier,flags "$APP_BUNDLE"
+          else
+            codesign --force --sign "Apple Distribution" --preserve-metadata=entitlements,identifier,flags "$APP_BUNDLE"
+          fi
+
+          # Repackage verified IPA
+          IPA_FULL="$(cd $(dirname "$IPA_PATH") && pwd)/$(basename "$IPA_PATH")"
+          rm -f "$IPA_FULL"
+          (cd /tmp/ipa-check && zip -qr "$IPA_FULL" Payload)
+          echo "Successfully finalized IPA at: $IPA_FULL"
 
       - name: Identify IPA Path
         id: ipa
