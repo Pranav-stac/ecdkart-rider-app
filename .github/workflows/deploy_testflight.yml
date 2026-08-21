@@ -23,10 +23,11 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     env:
-      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || '87CDJ95N5V' }}
       APP_STORE_CONNECT_API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'BV3K2HZZN7' }}
+      BUNDLE_ID: 'com.ecdkart.rider'
       IOS_DISTRIBUTION_CERT_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERT_BASE64 }}
       IOS_DISTRIBUTION_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
       IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
@@ -58,12 +59,17 @@ jobs:
 
       - name: Setup App Store Connect API Key
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys
-          mkdir -p ~/.private_keys
-          echo "$APP_STORE_CONNECT_API_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
-          echo "$APP_STORE_CONNECT_API_PRIVATE_KEY" > ~/.private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
-          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
-          chmod 600 ~/.private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8
+          mkdir -p ~/.appstoreconnect/private_keys ~/.private_keys
+          cat << 'EOF' > ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8
+-----BEGIN PRIVATE KEY-----
+MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgEaADG6HrgBnvKwSY
+McVNR6Tv6RVXUoPaLHrsuy62TX6gCgYIKoZIzj0DAQehRANCAASga+OqYuSSUGs+
+6IszNainK7sLiAtrf13iu4i31ACN0OPkfmTWtpUIdspYi7AASCCe2hD4oikPHv+3
+anF+VUAd
+-----END PRIVATE KEY-----
+EOF
+          cp ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8 ~/.private_keys/AuthKey_87CDJ95N5V.p8
 
       - name: Import Apple Codesigning Certificate (if provided)
         if: env.IOS_DISTRIBUTION_CERT_BASE64 != '' && env.IOS_DISTRIBUTION_CERT_PASSWORD != ''
@@ -82,6 +88,16 @@ jobs:
           UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PP_PATH")")
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${UUID}.mobileprovision"
 
+      - name: Download App Store Provisioning Profile via Fastlane
+        run: |
+          gem install fastlane --no-document
+          fastlane run get_provisioning_profile \
+            api_key_path:"$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
+            api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
+            api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
+            app_identifier:"$BUNDLE_ID" \
+            adhoc:false || true
+
       - name: Configure CocoaPods & Xcode Signing
         run: |
           flutter config --no-enable-swift-package-manager
@@ -91,45 +107,19 @@ jobs:
           pod install --repo-update
           cd ..
 
-      - name: Build Flutter iOS Assets (No Code Signing)
+      - name: Build Release IPA
+        id: build_ipa
         env:
           INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          BUILD_ARGS="--release --no-codesign"
+          BUILD_ARGS="--release --export-options-plist=ios/ExportOptions.plist"
           if [ -n "$INPUT_BUILD_NUMBER" ]; then
             BUILD_ARGS="$BUILD_ARGS --build-number=$INPUT_BUILD_NUMBER"
           elif [ -n "${{ github.run_number }}" ]; then
             BUILD_ARGS="$BUILD_ARGS --build-number=${{ github.run_number }}"
           fi
-          echo "Building iOS with: $BUILD_ARGS"
-          flutter build ios $BUILD_ARGS
-
-      - name: Build & Archive with Xcode (Automated Provisioning via API Key)
-        run: |
-          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
-          xcodebuild archive \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID" \
-            DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
-
-      - name: Export IPA
-        run: |
-          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
-          xcodebuild -exportArchive \
-            -archivePath build/ios/archive/Runner.xcarchive \
-            -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/ExportOptions.plist \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
+          echo "Building IPA with: $BUILD_ARGS"
+          flutter build ipa $BUILD_ARGS
 
       - name: Identify IPA Path
         id: ipa
@@ -150,6 +140,6 @@ jobs:
         uses: apple-actions/upload-testflight-build@v3
         with:
           app-path: ${{ steps.ipa.outputs.path }}
-          issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID || '655bf14b-54cb-4b8d-b335-15f5a9e48b9d' }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID || '87CDJ95N5V' }}
           api-private-key: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
