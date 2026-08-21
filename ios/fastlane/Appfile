@@ -1,4 +1,2 @@
-﻿app_identifier("com.ecdkart.rider")
-apple_id(ENV["APPLE_ID"] || "yograj@ecdkart.co.in")
-team_id("BV3K2HZZN7")
-itc_team_id("BV3K2HZZN7")
+app_identifier('com.ecdkart.rider')
+team_id('BV3K2HZZN7')

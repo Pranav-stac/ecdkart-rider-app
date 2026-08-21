@@ -3,10 +3,14 @@ default_platform(:ios)
 platform :ios do
   desc "Build, Sign, and Push to TestFlight"
   lane :beta do
+    key_file = "#{ENV['HOME']}/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8"
+    key_content = File.exist?(key_file) ? File.read(key_file) : ENV["APP_STORE_CONNECT_API_PRIVATE_KEY"]
+
     api_key = app_store_connect_api_key(
       key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"] || "87CDJ95N5V",
       issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"] || "655bf14b-54cb-4b8d-b335-15f5a9e48b9d",
-      key_filepath: "#{ENV['HOME']}/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8",
+      key_content: key_content,
+      is_key_content_base64: false,
       in_house: false
     )
 
