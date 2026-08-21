@@ -1,6 +1,7 @@
 platform :ios, '15.0'
 
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+$FirebaseSDKVersion = '11.8.0'
 
 project 'Runner', {
   'Debug' => :debug,
