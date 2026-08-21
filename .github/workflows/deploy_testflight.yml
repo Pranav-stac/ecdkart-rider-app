@@ -56,7 +56,7 @@ jobs:
 
       - name: Setup App Store Connect API Key
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys ~/.private_keys
+          mkdir -p ~/.appstoreconnect/private_keys ~/.private_keys ~/Library/MobileDevice/Provisioning\ Profiles
           printf -- '%s\n' \
             "-----BEGIN PRIVATE KEY-----" \
             "MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgEaADG6HrgBnvKwSY" \
@@ -96,8 +96,10 @@ jobs:
             api_key_id:"$APP_STORE_CONNECT_API_KEY_ID" \
             api_key_issuer_id:"$APP_STORE_CONNECT_ISSUER_ID" \
             app_identifier:"$BUNDLE_ID" \
+            output_path:"$HOME/Library/MobileDevice/Provisioning Profiles" \
             force:true \
             adhoc:false || true
+          cp *.mobileprovision "$HOME/Library/MobileDevice/Provisioning Profiles/" 2>/dev/null || true
 
       - name: Configure CocoaPods & Xcode Signing
         run: |
@@ -141,7 +143,11 @@ jobs:
           xcodebuild -exportArchive \
             -archivePath build/ios/archive/Runner.xcarchive \
             -exportPath build/ios/ipa \
-            -exportOptionsPlist ios/ExportOptions.plist
+            -exportOptionsPlist ios/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_87CDJ95N5V.p8" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
 
       - name: Identify IPA Path
         id: ipa
