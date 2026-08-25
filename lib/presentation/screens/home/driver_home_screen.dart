@@ -109,15 +109,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
+        title: Row(
           children: [
             Icon(Icons.location_on, color: primaryGreen, size: 28),
-            SizedBox(width: 12),
-            Expanded(child: Text('Location Required')),
+            const SizedBox(width: 12),
+            const Expanded(child: Text('Location Required')),
           ],
         ),
         content: const Text(
-          'ECDKART Rider needs location access to receive and deliver orders. Please tap Enable to allow location access, or tap Open Settings if previously disabled.',
+          'Enable location to receive and deliver orders. Your location helps us assign nearby orders.',
           style: TextStyle(fontSize: 15),
         ),
         actions: [
@@ -128,14 +128,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              final granted = await LocationService.requestLocationPermission();
-              if (!granted && mounted) {
-                await LocationService.openAppSettingsDirect();
-              } else if (granted && mounted) {
-                if (!_isOnline) {
-                  _toggleOnlineStatus();
-                }
-              }
+              await LocationService.requestLocationPermission();
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryGreen,
@@ -144,7 +137,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 borderRadius: BorderRadius.circular(8),
               ),
             ),
-            child: const Text('Enable / Settings'),
+            child: const Text('Enable'),
           ),
         ],
       ),

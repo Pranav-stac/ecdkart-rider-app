@@ -51,10 +51,6 @@
 		<string>ECDKART Rider needs your location to navigate to restaurants and customers.</string>
 		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 		<string>ECDKART Rider uses your location to track deliveries and update your position for customers.</string>
-		<key>NSLocationAlwaysUsageDescription</key>
-		<string>ECDKART Rider needs your location to track deliveries and update your position for customers.</string>
-		<key>ITSAppUsesNonExemptEncryption</key>
-		<false/>
 		<key>NSCameraUsageDescription</key>
 		<string>ECDKART Rider needs camera access to upload verification documents.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
