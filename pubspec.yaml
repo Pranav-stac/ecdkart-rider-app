@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.2+32
+version: 1.0.2+33
 
 environment:
   sdk: ^3.10.1
@@ -95,37 +95,7 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
-    - splash_logo.png
-    - rider_login_header.jpg
-    - rider_top_header.jpg
-    - rider_home_banner.jpg
-    - rider_hero_header.jpg
-    - rider_partner_hero.jpg
-    - rider_profile_header.jpg
-    - reg_header.jpg
-    - otp_header.jpg
-    - selfie_header.jpg
-    - vehicle_header.jpg
-    - docs_header.jpg
-    - bank_header.jpg
-    - welcome_header.jpg
-    - welcome_back.png
-    - assets/ordertone.mpeg
-    - assets/onboarding_illustration.jpg
-    - assets/rider_login_header.jpg
-    - assets/rider_top_header.jpg
-    - assets/rider_home_banner.jpg
-    - assets/rider_hero_header.jpg
-    - assets/rider_partner_hero.jpg
-    - assets/rider_profile_header.jpg
-    - assets/reg_header.jpg
-    - assets/otp_header.jpg
-    - assets/selfie_header.jpg
-    - assets/vehicle_header.jpg
-    - assets/docs_header.jpg
-    - assets/bank_header.jpg
-    - assets/welcome_header.jpg
-    - assets/welcome_back.png
+    - assets/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
