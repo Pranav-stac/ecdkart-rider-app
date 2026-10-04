@@ -6,6 +6,7 @@ import '../../../logic/blocs/auth/auth_event.dart';
 import '../../../logic/blocs/auth/auth_state.dart';
 import '../home/driver_home_screen.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../../widgets/welcome_back_logo.dart';
 
 class PinLoginScreen extends StatefulWidget {
   final String? phone; // Make it optional
@@ -48,10 +49,10 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
       textStyle: GoogleFonts.poppins(
         fontSize: 22,
         fontWeight: FontWeight.bold,
-        color: const Color(0xFF1C1C1E),
+        color: const Color(0xFF2C2C2C),
       ),
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F7F9),
+        color: const Color(0xFFF5FAF8),
         border: Border.all(color: Colors.transparent),
         borderRadius: BorderRadius.circular(16),
       ),
@@ -90,7 +91,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
               child: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xFF22C55E), Color(0xFF22C55E)],
+                    colors: [Color(0xFF248C70), Color(0xFF248C70)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
@@ -142,7 +143,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                             borderRadius: BorderRadius.circular(isKeyboardOpen ? 12 : 20),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
+                                color: Colors.black.withValues(alpha: 0.1),
                                 blurRadius: 20,
                                 offset: const Offset(0, 5),
                               ),
@@ -156,7 +157,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                               errorBuilder: (context, error, stackTrace) => Icon(
                                 Icons.delivery_dining_rounded,
                                 size: isKeyboardOpen ? 24 : 40,
-                                color: const Color(0xFF22C55E),
+                                color: const Color(0xFF248C70),
                               ),
                             ),
                           ),
@@ -205,15 +206,8 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               // Welcome Back Text
-                              Center(
-                                child: Text(
-                                  'Welcome back',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 22,
-                                    fontWeight: FontWeight.w700,
-                                    color: const Color(0xFF1C1C1E),
-                                  ),
-                                ),
+                              const Center(
+                                child: WelcomeBackLogo(height: 64),
                               ),
                               const SizedBox(height: 16),
                               
@@ -222,7 +216,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                 style: GoogleFonts.poppins(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF1C1C1E),
+                                  color: const Color(0xFF2C2C2C),
                                 ),
                               ),
                               const SizedBox(height: 8),
@@ -230,7 +224,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                               // Phone Input
                               Container(
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFFF5F7F9),
+                                  color: const Color(0xFFF5FAF8),
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(color: Colors.transparent),
                                 ),
@@ -242,7 +236,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                     fontSize: 18, 
                                     fontWeight: FontWeight.w600, 
                                     letterSpacing: 2.0,
-                                    color: const Color(0xFF1C1C1E),
+                                    color: const Color(0xFF2C2C2C),
                                   ),
                                   decoration: InputDecoration(
                                     prefixIcon: Padding(
@@ -250,13 +244,13 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                       child: Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
-                                          const Icon(Icons.phone_android_rounded, color: Color(0xFF22C55E), size: 22),
+                                          const Icon(Icons.phone_android_rounded, color: Color(0xFF248C70), size: 22),
                                           const SizedBox(width: 12),
                                           Text(
                                             '+91',
                                             style: GoogleFonts.poppins(
                                               fontWeight: FontWeight.w600, 
-                                              color: const Color(0xFF1C1C1E), 
+                                              color: const Color(0xFF2C2C2C), 
                                               fontSize: 18,
                                             ),
                                           ),
@@ -285,7 +279,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                 style: GoogleFonts.poppins(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
-                                  color: const Color(0xFF1C1C1E),
+                                  color: const Color(0xFF2C2C2C),
                                 ),
                               ),
                               const SizedBox(height: 8),
@@ -299,7 +293,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                   defaultPinTheme: defaultPinTheme,
                                   focusedPinTheme: defaultPinTheme.copyWith(
                                     decoration: defaultPinTheme.decoration!.copyWith(
-                                      border: Border.all(color: const Color(0xFF22C55E), width: 2),
+                                      border: Border.all(color: const Color(0xFF248C70), width: 2),
                                     ),
                                   ),
                                   onCompleted: (_) => _loginWithPin(),
@@ -317,7 +311,7 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                     child: ElevatedButton(
                                       onPressed: _loginWithPin,
                                       style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFF111827),
+                                        backgroundColor: const Color(0xFF2C2C2C),
                                         foregroundColor: Colors.white,
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
@@ -356,11 +350,11 @@ class _PinLoginScreenState extends State<PinLoginScreen> {
                                       onPressed: () => Navigator.pop(context),
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.white,
-                                        foregroundColor: const Color(0xFF111827),
+                                        foregroundColor: const Color(0xFF2C2C2C),
                                         elevation: 0,
                                         shape: RoundedRectangleBorder(
                                           borderRadius: BorderRadius.circular(16),
-                                          side: const BorderSide(color: Color(0xFF111827), width: 1.5),
+                                          side: const BorderSide(color: Color(0xFF2C2C2C), width: 1.5),
                                         ),
                                       ),
                                       child: Text(

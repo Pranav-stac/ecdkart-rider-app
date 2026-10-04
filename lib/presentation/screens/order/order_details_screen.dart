@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../../../logic/blocs/driver/driver_bloc.dart';
 import '../../../logic/blocs/driver/driver_event.dart';
 import '../../../logic/blocs/driver/driver_state.dart';
@@ -17,8 +16,7 @@ class OrderDetailsScreen extends StatefulWidget {
 }
 
 class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
-  static const Color primaryGreen = Color(0xFF22C55E);
-  static const Color lightGreen = Color(0xFFE8F5E9);
+  static const Color primaryGreen = Color(0xFF248C70);
   bool _isLoading = false;
   late Map<String, dynamic> _currentOrder;
 
@@ -26,6 +24,29 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   void initState() {
     super.initState();
     _currentOrder = widget.order;
+  }
+
+  String _parseAddressToString(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is String) return raw.trim();
+    if (raw is List) {
+      if (raw.isEmpty) return '';
+      return _parseAddressToString(raw.first);
+    }
+    if (raw is Map) {
+      final line = raw['fullAddress'] ?? raw['address'] ?? raw['addressLine'] ?? raw['street'] ?? '';
+      final city = raw['city'] ?? raw['cityName'] ?? '';
+      final lineStr = _parseAddressToString(line);
+      final cityStr = _parseAddressToString(city);
+      if (lineStr.isNotEmpty) {
+        if (cityStr.isNotEmpty && !lineStr.toLowerCase().contains(cityStr.toLowerCase())) {
+          return "$lineStr, $cityStr";
+        }
+        return lineStr;
+      }
+      if (cityStr.isNotEmpty) return cityStr;
+    }
+    return raw.toString();
   }
 
   @override
@@ -124,7 +145,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
-                        BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 8, offset: const Offset(0, 2))
+                        BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 2))
                       ],
                     ),
                     child: Column(
@@ -143,7 +164,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                 color: (deliveryStatus == 'out_for_delivery' || deliveryStatus == 'delivered'
                                         ? primaryGreen
                                         : Colors.orange[700]!)
-                                    .withOpacity(0.1),
+                                    .withValues(alpha: 0.1),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
@@ -223,7 +244,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                         _buildDetailRow(
                           Icons.location_on_outlined,
                           'Delivery Address',
-                          (address is String) ? address : (address?['fullAddress'] ?? '${address?['addressLine'] ?? ''}, ${address?['city'] ?? ''}'),
+                          _parseAddressToString(address).isNotEmpty ? _parseAddressToString(address) : 'N/A',
                         ),
                       ],
                     ),
@@ -240,7 +261,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                           shrinkWrap: true,
                           physics: const NeverScrollableScrollPhysics(),
                           itemCount: items.length,
-                          separatorBuilder: (_, __) => const Divider(height: 16),
+                          separatorBuilder: (_, _) => const Divider(height: 16),
                           itemBuilder: (context, index) {
                             final item = items[index];
                             final qty = item['qty'] ?? item['quantity'] ?? 1;
@@ -418,7 +439,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                 ),
               ),
 
-            if (deliveryStatus == 'reached_store')
+            if (['assigned', 'accepted', 'reached_store', 'ready', 'preparing'].contains(deliveryStatus))
               Positioned(
                 bottom: 85,
                 left: 16,
@@ -434,12 +455,12 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                   child: Column(
                     children: [
                       const Text(
-                        'SHOW THIS OTP TO RESTAURANT',
-                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange),
+                        'SHOW THIS 4-DIGIT CODE TO RESTAURANT FOR PICKUP',
+                        style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orange, fontSize: 12),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        _currentOrder['pickupOtp'] ?? 'N/A',
+                        _currentOrder['pickupOtp'] ?? _currentOrder['pickupOTP'] ?? _currentOrder['selfPickupCode'] ?? (_currentOrder['otps']?['pickup']?['otp']) ?? '----',
                         style: const TextStyle(
                           fontSize: 32,
                           fontWeight: FontWeight.bold,
@@ -474,7 +495,7 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 6, offset: const Offset(0, 2))
+          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 6, offset: const Offset(0, 2))
         ],
       ),
       child: Column(
@@ -545,14 +566,14 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
 
 class InlineDeliveryOtpForm extends StatefulWidget {
   final Map<String, dynamic> order;
-  const InlineDeliveryOtpForm({Key? key, required this.order}) : super(key: key);
+  const InlineDeliveryOtpForm({super.key, required this.order});
 
   @override
-  _InlineDeliveryOtpFormState createState() => _InlineDeliveryOtpFormState();
+  State<InlineDeliveryOtpForm> createState() => _InlineDeliveryOtpFormState();
 }
 
 class _InlineDeliveryOtpFormState extends State<InlineDeliveryOtpForm> {
-  static const Color primaryGreen = Color(0xFF22C55E);
+  static const Color primaryGreen = Color(0xFF248C70);
 
   final TextEditingController _otpController = TextEditingController();
   bool _isSendingOtp = false;
@@ -561,10 +582,12 @@ class _InlineDeliveryOtpFormState extends State<InlineDeliveryOtpForm> {
     setState(() => _isSendingOtp = true);
     try {
       final response = await ApiService.sendDeliveryOtp(widget.order['_id'] ?? '');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(response['message'] ?? 'OTP sent successfully'), backgroundColor: primaryGreen),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
       );

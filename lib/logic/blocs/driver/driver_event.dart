@@ -21,7 +21,11 @@ class ToggleOnlineStatus extends DriverEvent {
 
 // Mark driver as reached store
 class MarkReachedStore extends DriverEvent {
-  const MarkReachedStore();
+  final UserModel? currentUser;
+  const MarkReachedStore({this.currentUser});
+
+  @override
+  List<Object?> get props => [currentUser];
 }
 
 // Update driver location

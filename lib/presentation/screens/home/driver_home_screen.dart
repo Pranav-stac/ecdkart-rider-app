@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:geolocator/geolocator.dart';
+import '../../../data/models/user_models.dart';
 import '../../../data/services/api_service.dart';
+import '../../../data/services/notification_service.dart';
 import '../../../logic/blocs/auth/auth_bloc.dart';
 import '../../../logic/blocs/auth/auth_event.dart';
 import '../../../logic/blocs/auth/auth_state.dart';
@@ -12,11 +14,14 @@ import '../../../logic/blocs/driver/driver_bloc.dart';
 import '../../../logic/blocs/driver/driver_event.dart';
 import '../../../logic/blocs/driver/driver_state.dart';
 import '../../../data/services/location_service.dart';
-import '../auth/login_screen.dart';
+import '../auth/rider_relogin_screen.dart';
 import '../auth/profile_screen.dart';
-import '../order/order_details_screen.dart';
+import '../onboarding_screen.dart';
 import '../order/order_tracking_screen.dart';
+import '../wallet/rider_wallet_screen.dart';
+import 'widgets/notifications_sheet.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 class DriverHomeScreen extends StatefulWidget {
   const DriverHomeScreen({super.key});
@@ -30,27 +35,76 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   bool _isReturning = false;
   bool _isTrackingLocation = false;
   bool _showIncomingOrder = false;
+  bool _celebrationDialogShown = false;
   final Set<String> _processedOrders = {};
 
   late AnimationController _timerController;
   Timer? _pollingTimer;
+  StreamSubscription? _notificationSub;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isRingtonePlaying = false;
 
-  // Blinkit-style colors
-  static const Color primaryGreen = Color(0xFF22C55E);
+  // ECD Kart brand colors
+  static const Color primaryGreen = Color(0xFF248C70);
   static const Color lightGreen = Color(0xFFE8F5E9);
-  static const Color darkGreen = Color(0xFF0A5C17);
+  static const Color darkBlack = Color(0xFF1E2022);
 
   @override
   void initState() {
     super.initState();
     _initializeDriverStatus();
     _checkLocationPermission();
+
+    // Initialize Push Notifications (FCM) & In-App notification listener
+    NotificationService.initialize();
+    _notificationSub = NotificationService.onNotificationReceived.listen((payload) {
+      if (!mounted) return;
+      final title = payload['title'] ?? 'Notification';
+      final body = payload['body'] ?? '';
+      final type = payload['type'] ?? '';
+      final isApproval = type == 'RIDER_VERIFIED' ||
+          title.toLowerCase().contains('rider approved') ||
+          (title.toLowerCase().contains('approved') && !title.toLowerCase().contains('payment') && !title.toLowerCase().contains('payout') && !title.toLowerCase().contains('withdrawal'));
+
+      if (isApproval) {
+        context.read<AuthBloc>().add(const CheckAuthStatus());
+        _showApprovalCelebrationDialog(title, body);
+      } else {
+        if (type == 'dispatch_request' || type == 'order_available' || title.toLowerCase().contains('delivery request') || title.toLowerCase().contains('order')) {
+          context.read<DriverBloc>().add(const LoadActiveOrders());
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(
+                  type == 'PAYOUT_APPROVED' ? Icons.account_balance_wallet_rounded : Icons.notifications_active_rounded,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    body.isNotEmpty ? body : title,
+                    style: GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+            backgroundColor: type == 'PAYOUT_REJECTED' ? Colors.redAccent : primaryGreen,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    });
+
     _timerController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 15),
     )..addStatusListener((status) {
       if (status == AnimationStatus.completed) {
         if (mounted && _showIncomingOrder) {
+          _stopOrderRingtone();
           final state = context.read<DriverBloc>().state;
           final activeOrder = state.orders.isNotEmpty ? state.orders.first : null;
           if (activeOrder != null && activeOrder['deliveryStatus'] == 'driver_notified') {
@@ -75,24 +129,100 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<DriverBloc>().add(const LoadActiveOrders());
-      // Poll for active orders every 3 seconds for near real-time order popups
-      _pollingTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-        if (mounted) {
-          context.read<DriverBloc>().add(const LoadActiveOrders(isSilent: true));
-        }
-      });
+      NotificationService.syncWithdrawalNotifications();
+      _startPollingActiveOrders();
     });
   }
 
+  void _startPollingActiveOrders() {
+    _pollingTimer?.cancel();
+    _pollingTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (mounted && _isOnline) {
+        context.read<DriverBloc>().add(const LoadActiveOrders(isSilent: true));
+      }
+    });
+  }
 
+  void _showApprovalCelebrationDialog(String title, String body) {
+    if (_celebrationDialogShown) return;
+    _celebrationDialogShown = true;
+
+    final notifTitle = title.isNotEmpty ? title : 'Profile Approved! 🎉';
+    final notifBody = body.isNotEmpty
+        ? body
+        : 'Congratulations! Your rider profile has been verified and approved by Admin. You can now go online and start accepting orders.';
+
+    // Save notification to bell icon list
+    NotificationService.addNotification(
+      title: notifTitle,
+      body: notifBody,
+      type: 'APPROVAL',
+    );
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: lightGreen,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.verified_rounded, color: primaryGreen, size: 48),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Profile Approved! 🎉',
+              style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 18),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        content: Text(
+          notifBody,
+          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[700], height: 1.4),
+          textAlign: TextAlign.center,
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: primaryGreen,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: Text('Start Earning', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _initializeDriverStatus() {
     final authState = context.read<AuthBloc>().state;
     if (authState is Authenticated) {
+      final isVerified = authState.user.isVerified;
       setState(() {
-        _isOnline = authState.user.isOnline;
+        _isOnline = isVerified ? authState.user.isOnline : false;
         _isReturning = authState.user.isReturning;
       });
+      if (isVerified) {
+        NotificationService.addNotification(
+          title: 'Profile Approved! 🎉',
+          body: 'Congratulations! Your rider profile has been verified and approved by Admin. You can now go online and start accepting orders.',
+          type: 'APPROVAL',
+        );
+      }
+    } else if (authState is AuthInitial) {
+      context.read<AuthBloc>().add(const CheckAuthStatus());
     }
   }
 
@@ -111,19 +241,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Row(
           children: [
-            Icon(Icons.location_on, color: primaryGreen, size: 28),
+            const Icon(Icons.location_on, color: primaryGreen, size: 28),
             const SizedBox(width: 12),
-            const Expanded(child: Text('Location Required')),
+            Expanded(
+              child: Text(
+                'Location Required',
+                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
           ],
         ),
-        content: const Text(
+        content: Text(
           'Enable location to receive and deliver orders. Your location helps us assign nearby orders.',
-          style: TextStyle(fontSize: 15),
+          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[700]),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Later', style: TextStyle(color: Colors.grey)),
+            child: Text('Later', style: GoogleFonts.poppins(color: Colors.grey[600])),
           ),
           ElevatedButton(
             onPressed: () async {
@@ -134,10 +269,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               backgroundColor: primaryGreen,
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
+              elevation: 0,
             ),
-            child: const Text('Enable'),
+            child: Text('Enable', style: GoogleFonts.poppins(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -145,6 +281,31 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   }
 
   Future<void> _toggleOnlineStatus() async {
+    final authState = context.read<AuthBloc>().state;
+    if (authState is! Authenticated || !authState.user.isVerified) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.lock_clock_rounded, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Your profile is under review by Admin. You can go online once approved.',
+                  style: GoogleFonts.poppins(fontSize: 13, fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: primaryGreen,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+      return;
+    }
+
+    final user = authState.user;
     final newStatus = !_isOnline;
 
     if (newStatus) {
@@ -158,19 +319,20 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       await _stopLocationTracking();
     }
 
-    final authState = context.read<AuthBloc>().state;
-    if (authState is Authenticated) {
-      context.read<DriverBloc>().add(
-        ToggleOnlineStatus(
-          isOnline: newStatus, 
-          currentUser: authState.user,
-        ),
-      );
-      
-      // Auto-refresh orders when going online
-      if (newStatus) {
-        context.read<DriverBloc>().add(const LoadActiveOrders());
-      }
+    if (!mounted) return;
+    context.read<DriverBloc>().add(
+      ToggleOnlineStatus(
+        isOnline: newStatus, 
+        currentUser: user,
+      ),
+    );
+    
+    // Auto-refresh orders when going online
+    if (newStatus) {
+      context.read<DriverBloc>().add(const LoadActiveOrders());
+      _startPollingActiveOrders();
+    } else {
+      _pollingTimer?.cancel();
     }
   }
 
@@ -196,13 +358,42 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   }
 
   void _markReachedStore() {
-    context.read<DriverBloc>().add(const MarkReachedStore());
+    final authState = context.read<AuthBloc>().state;
+    UserModel? user;
+    if (authState is Authenticated) {
+      user = authState.user;
+    }
+    context.read<DriverBloc>().add(MarkReachedStore(currentUser: user));
+  }
+
+  void _playOrderRingtone() async {
+    try {
+      if (_isRingtonePlaying) return;
+      _isRingtonePlaying = true;
+      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
+      await _audioPlayer.play(AssetSource('ordertone.mpeg'));
+    } catch (e) {
+      debugPrint('Error playing ringtone: $e');
+    }
+  }
+
+  void _stopOrderRingtone() async {
+    try {
+      _isRingtonePlaying = false;
+      await _audioPlayer.stop();
+    } catch (e) {
+      debugPrint('Error stopping ringtone: $e');
+    }
   }
 
   @override
   void dispose() {
+    _stopOrderRingtone();
+    _notificationSub?.cancel();
     _stopLocationTracking();
     _timerController.dispose();
+    _pollingTimer?.cancel();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -214,18 +405,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
           listener: (context, state) {
             if (state is Unauthenticated) {
               Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                MaterialPageRoute(builder: (_) => const RiderReloginScreen()),
                 (route) => false,
               );
+            } else if (state is Authenticated) {
+              setState(() {
+                _isOnline = state.user.isVerified ? state.user.isOnline : false;
+                _isReturning = state.user.isReturning;
+              });
+
+              if (state.user.isVerified && !_celebrationDialogShown) {
+                _showApprovalCelebrationDialog(
+                  'Profile Approved! 🎉',
+                  'Congratulations! Your rider profile has been verified and approved by Admin. You can now go online and start accepting orders.',
+                );
+              }
             }
           },
         ),
         BlocListener<DriverBloc, DriverState>(
           listener: (context, state) {
             if (state is OnlineStatusUpdated) {
-              setState(() => _isOnline = state.isOnline);
+              _stopOrderRingtone();
+              final authState = context.read<AuthBloc>().state;
+              final isVerified = authState is Authenticated && authState.user.isVerified;
+              setState(() => _isOnline = isVerified ? state.isOnline : false);
 
-              // ✅ Update AuthBloc with new user data
+              // Update AuthBloc with new user data
               if (state.updatedUser != null) {
                 context.read<AuthBloc>().add(
                   UpdateUserData(user: state.updatedUser!),
@@ -238,27 +444,26 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                     children: [
                       Icon(
                         state.isOnline
-                            ? Icons.check_circle
-                            : Icons.pause_circle,
+                            ? Icons.check_circle_rounded
+                            : Icons.pause_circle_filled_rounded,
                         color: Colors.white,
                       ),
                       const SizedBox(width: 12),
-                      Expanded(child: Text(state.message)),
+                      Expanded(child: Text(state.message, style: GoogleFonts.poppins(fontWeight: FontWeight.w600))),
                     ],
                   ),
                   backgroundColor: state.isOnline
                       ? primaryGreen
-                      : Colors.orange[700],
+                      : darkBlack,
                   behavior: SnackBarBehavior.floating,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                 ),
               );
             } else if (state is ReachedStoreConfirmed) {
               setState(() => _isReturning = false);
 
-              // ✅ Update AuthBloc with new user data
               if (state.updatedUser != null) {
                 context.read<AuthBloc>().add(
                   UpdateUserData(user: state.updatedUser!),
@@ -269,15 +474,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 SnackBar(
                   content: Row(
                     children: [
-                      const Icon(Icons.store, color: Colors.white),
+                      const Icon(Icons.storefront_rounded, color: Colors.white),
                       const SizedBox(width: 12),
-                      Expanded(child: Text(state.message)),
+                      Expanded(child: Text(state.message, style: GoogleFonts.poppins(fontWeight: FontWeight.w600))),
                     ],
                   ),
                   backgroundColor: primaryGreen,
                   behavior: SnackBarBehavior.floating,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                 ),
               );
@@ -286,26 +491,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 SnackBar(
                   content: Row(
                     children: [
-                      const Icon(Icons.error_outline, color: Colors.white),
+                      const Icon(Icons.error_outline_rounded, color: Colors.white),
                       const SizedBox(width: 12),
-                      Expanded(child: Text(state.message)),
+                      Expanded(child: Text(state.message, style: GoogleFonts.poppins(fontSize: 12))),
                     ],
                   ),
                   backgroundColor: Colors.red[700],
                   behavior: SnackBarBehavior.floating,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                 ),
               );
             } else if (state is ActiveOrdersLoaded) {
               if (state.orders.isNotEmpty) {
-                final activeOrder = state.orders.first;
+                final incomingIndex = state.orders.indexWhere((o) => o['deliveryStatus'] == 'driver_notified');
+                final activeOrder = incomingIndex != -1 ? state.orders[incomingIndex] : state.orders.first;
                 final processKey = '${activeOrder['_id']}_${activeOrder['updatedAt'] ?? ''}';
                 if (activeOrder['deliveryStatus'] == 'driver_notified' && !_showIncomingOrder && !_processedOrders.contains(processKey)) {
                   setState(() => _showIncomingOrder = true);
+                  _playOrderRingtone();
                   _timerController.reset();
                   _timerController.forward();
+                } else if (incomingIndex == -1 || _processedOrders.contains(processKey)) {
+                  if (_showIncomingOrder || _isRingtonePlaying) {
+                    _stopOrderRingtone();
+                    setState(() => _showIncomingOrder = false);
+                  }
+                }
+              } else {
+                if (_showIncomingOrder || _isRingtonePlaying) {
+                  _stopOrderRingtone();
+                  setState(() => _showIncomingOrder = false);
                 }
               }
             }
@@ -313,129 +530,27 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         ),
       ],
       child: Scaffold(
-        backgroundColor: Colors.grey[50],
-        appBar: AppBar(
-          backgroundColor: const Color(0xFF9EF01A),
-          foregroundColor: Colors.black,
-          elevation: 2,
-          shadowColor: Colors.black45,
-          titleSpacing: 8,
-          title: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: Image.asset(
-                    'splash_logo.png',
-                    width: 28,
-                    height: 28,
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) => Icon(
-                      Icons.local_shipping,
-                      color: primaryGreen,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'ECD KART',
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 17,
-                          letterSpacing: 0.5,
-                          color: Colors.black,
-                        ),
-                      ),
-                    ),
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'RIDER',
-                        style: GoogleFonts.poppins(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 9,
-                          letterSpacing: 1.5,
-                          color: Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            Container(
-              margin: const EdgeInsets.only(right: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: _isOnline ? const Color(0xFF16A34A) : Colors.redAccent.withOpacity(0.8),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: _isOnline ? Colors.white : Colors.white70,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    _isOnline ? 'ONLINE' : 'OFFLINE',
-                    style: GoogleFonts.poppins(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                      color: Colors.white,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(right: 8.0),
-              child: IconButton(
-                icon: const Icon(Icons.notifications_outlined, color: Colors.black87),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('No new notifications')),
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
+        backgroundColor: const Color(0xFFF8F9FA),
         body: BlocBuilder<AuthBloc, AuthState>(
           builder: (context, authState) {
             if (authState is! Authenticated) {
-              return const Center(child: CircularProgressIndicator());
+              if (authState is Unauthenticated || authState is AuthError) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const RiderReloginScreen()),
+                      (route) => false,
+                    );
+                  }
+                });
+              } else if (authState is AuthInitial) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    context.read<AuthBloc>().add(const CheckAuthStatus());
+                  }
+                });
+              }
+              return const Center(child: CircularProgressIndicator(color: primaryGreen));
             }
 
             return Stack(
@@ -448,16 +563,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                   child: SingleChildScrollView(
                     physics: const AlwaysScrollableScrollPhysics(),
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Frosted Header Banner with Generated Rider Image
+                        _buildRiderHeaderBanner(authState.user),
+
+                        const SizedBox(height: 14),
+
+                        // Profile Card
                         _buildProfileSection(authState.user),
-                        const SizedBox(height: 16),
+
+                        const SizedBox(height: 14),
+
+                        // Go Online / Offline Action Button
                         _buildActionButtons(),
-                        const SizedBox(height: 16),
+
+                        const SizedBox(height: 14),
+
+                        // Location & Status Stats Cards
                         _buildStatsCards(),
-                        const SizedBox(height: 16),
+
+                        const SizedBox(height: 14),
+
+                        // Today Progress Section
                         _buildTodayProgressSection(),
-                        const SizedBox(height: 20),
+
+                        const SizedBox(height: 18),
+
+                        // Orders Section (Active, Complete, Cancel tabs)
                         _buildOrdersSection(),
+
+                        const SizedBox(height: 40),
                       ],
                     ),
                   ),
@@ -474,19 +610,357 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     );
   }
 
+  // Clear & Premium Header Banner with Rider Hero Image
+  Widget _buildRiderHeaderBanner(dynamic user) {
+    return SizedBox(
+      width: double.infinity,
+      height: 230,
+      child: Stack(
+        children: [
+          // Crisp Background Rider Hero Image (No aggressive blur!)
+          Positioned.fill(
+            child: Image.asset(
+              'rider_partner_hero.jpg',
+              fit: BoxFit.cover,
+              alignment: const Alignment(0.15, -0.15),
+              filterQuality: FilterQuality.high,
+              errorBuilder: (context, error, stackTrace) => Image.asset(
+                'assets/rider_partner_hero.jpg',
+                fit: BoxFit.cover,
+                alignment: const Alignment(0.15, -0.15),
+                filterQuality: FilterQuality.high,
+                errorBuilder: (context, error, stackTrace) => Image.asset(
+                  'rider_hero_header.jpg',
+                  fit: BoxFit.cover,
+                  alignment: const Alignment(0.15, -0.15),
+                  filterQuality: FilterQuality.high,
+                  errorBuilder: (context, error, stackTrace) => Image.asset(
+                    'assets/rider_hero_header.jpg',
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.high,
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      color: primaryGreen,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+
+          // Subtle Top & Bottom Gradient to ensure text contrast while keeping rider 100% visible
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withOpacity(0.60),
+                    Colors.transparent,
+                    Colors.transparent,
+                    Colors.black.withOpacity(0.30),
+                    const Color(0xFFF8F9FA),
+                  ],
+                  stops: const [0.0, 0.30, 0.70, 0.88, 1.0],
+                ),
+              ),
+            ),
+          ),
+
+          // Header Content
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Top Row: Brand capsule + Status Pill + Notification
+                  Row(
+                    children: [
+                      // Brand Pill Container
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.white.withOpacity(0.25)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.2),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: Image.asset(
+                                'splash_logo.png',
+                                width: 22,
+                                height: 22,
+                                fit: BoxFit.contain,
+                                errorBuilder: (context, error, stackTrace) => Image.asset(
+                                  'assets/splash_logo.png',
+                                  width: 22,
+                                  height: 22,
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (context, error, stackTrace) => const Icon(
+                                    Icons.delivery_dining_rounded,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  'ECD KART',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                    color: Colors.white,
+                                    height: 1.1,
+                                  ),
+                                ),
+                                Text(
+                                  'RIDER PARTNER',
+                                  style: GoogleFonts.poppins(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 8,
+                                    letterSpacing: 1.2,
+                                    color: const Color(0xFF70E000),
+                                    height: 1.1,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+
+                      // Online / Offline Status Badge
+                      GestureDetector(
+                        onTap: _toggleOnlineStatus,
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 250),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                          decoration: BoxDecoration(
+                            color: !user.isVerified
+                                ? primaryGreen
+                                : (_isOnline ? primaryGreen : Colors.redAccent.withOpacity(0.95)),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.white.withOpacity(0.3)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: (!user.isVerified
+                                        ? primaryGreen
+                                        : (_isOnline ? primaryGreen : Colors.redAccent))
+                                    .withOpacity(0.45),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                !user.isVerified
+                                    ? 'PENDING'
+                                    : (_isOnline ? 'ONLINE' : 'OFFLINE'),
+                                style: GoogleFonts.poppins(
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                  letterSpacing: 0.6,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+
+                      // Notifications Button with Live Badge
+                      ValueListenableBuilder<int>(
+                        valueListenable: NotificationService.unreadCountNotifier,
+                        builder: (context, unreadCount, _) {
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.45),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Colors.white.withOpacity(0.25)),
+                                ),
+                                child: IconButton(
+                                  icon: Icon(
+                                    unreadCount > 0 ? Icons.notifications_active_rounded : Icons.notifications_none_rounded,
+                                    color: unreadCount > 0 ? const Color(0xFFFBBF24) : Colors.white,
+                                    size: 20,
+                                  ),
+                                  padding: const EdgeInsets.all(8),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () {
+                                    NotificationsSheet.show(context);
+                                  },
+                                ),
+                              ),
+                              if (unreadCount > 0)
+                                Positioned(
+                                  top: -2,
+                                  right: -2,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(4),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red[600],
+                                      shape: BoxShape.circle,
+                                      border: Border.all(color: Colors.white, width: 1.5),
+                                    ),
+                                    constraints: const BoxConstraints(
+                                      minWidth: 16,
+                                      minHeight: 16,
+                                    ),
+                                    child: Text(
+                                      unreadCount > 9 ? '9+' : '$unreadCount',
+                                      style: GoogleFonts.poppins(
+                                        color: Colors.white,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+
+                  // Bottom Welcome Floating Card
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.60),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.25),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                                Text(
+                                  'Hello, ${(user.name != null && user.name.toString().trim().isNotEmpty && user.name.toString().trim() != 'Rider Partner') ? user.name : (user.phone.isNotEmpty ? user.phone : 'Rider Partner')} 👋',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                !user.isVerified
+                                    ? '⏳ Profile under review. Waiting for admin approval.'
+                                    : (_isOnline
+                                        ? '🟢 You are online & ready to receive orders'
+                                        : '🔴 You are offline. Tap Go Online to start'),
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: !user.isVerified
+                                      ? const Color(0xFFFFB703)
+                                      : (_isOnline ? const Color(0xFF9EF01A) : Colors.white70),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _parseAddressToString(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is String) return raw.trim();
+    if (raw is List) {
+      if (raw.isEmpty) return '';
+      return _parseAddressToString(raw.first);
+    }
+    if (raw is Map) {
+      final line = raw['fullAddress'] ?? raw['address'] ?? raw['addressLine'] ?? raw['street'] ?? '';
+      final city = raw['city'] ?? raw['cityName'] ?? '';
+      final lineStr = _parseAddressToString(line);
+      final cityStr = _parseAddressToString(city);
+      if (lineStr.isNotEmpty) {
+        if (cityStr.isNotEmpty && !lineStr.toLowerCase().contains(cityStr.toLowerCase())) {
+          return "$lineStr, $cityStr";
+        }
+        return lineStr;
+      }
+      if (cityStr.isNotEmpty) return cityStr;
+    }
+    return raw.toString();
+  }
+
   Widget _buildIncomingOrderPopup() {
     return BlocBuilder<DriverBloc, DriverState>(
       builder: (context, state) {
-        final activeOrder = state.orders.isNotEmpty ? state.orders.first : null;
+        final incomingIndex = state.orders.indexWhere((o) => o['deliveryStatus'] == 'driver_notified');
+        final activeOrder = incomingIndex != -1 ? state.orders[incomingIndex] : (state.orders.isNotEmpty ? state.orders.first : null);
         if (activeOrder == null) return const SizedBox.shrink();
 
-        final storeName = activeOrder['store']?['name'] ?? 'Restaurant';
-        final storeAddress = (activeOrder['store']?['address'] is String) ? activeOrder['store']['address'] : (activeOrder['store']?['address']?['fullAddress'] ?? 'Store Location');
-        final deliveryAddress = (activeOrder['customer']?['address'] is String) ? activeOrder['customer']['address'] : ((activeOrder['address'] is String) ? activeOrder['address'] : (activeOrder['address']?['fullAddress'] ?? 'Customer Location'));
+        final storeName = activeOrder['store']?['name'] ?? activeOrder['restaurant']?['name'] ?? 'FreshNow Store';
+        final rawStoreAddr = _parseAddressToString(activeOrder['store']?['address'] ?? activeOrder['restaurant']?['address']);
+        final storeAddress = rawStoreAddr.isNotEmpty ? rawStoreAddr : 'Store Location';
+
+        final rawDeliveryAddr = _parseAddressToString(
+          activeOrder['deliveryAddress'] ?? activeOrder['address'] ?? activeOrder['customer']?['address']
+        );
+        final deliveryAddress = rawDeliveryAddr.isNotEmpty ? rawDeliveryAddr : 'Customer Location';
         final earnings = (activeOrder['driverEarnings'] ?? activeOrder['deliveryCharge'] ?? 50.0).toStringAsFixed(2);
         final orderAmount = (activeOrder['payableAmount'] ?? activeOrder['totalAmount'] ?? 0.0).toStringAsFixed(2);
         final customerName = activeOrder['customer']?['name'] ?? 'Customer';
-        final orderNumber = activeOrder['orderNumber'] ?? 'Unknown';
         final paymentMode = (activeOrder['paymentTransaction'] != null && (activeOrder['paymentTransaction']['provider'] == 'cod' || activeOrder['paymentTransaction']['provider'] == 'Cash on Delivery')) || activeOrder['paymentMethod'] == 'Cash on Delivery' || activeOrder['paymentMethod'] == 'COD' ? 'Cash on Delivery' : 'Online / UPI';
 
         return Positioned(
@@ -547,8 +1021,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                                 children: [
                                   FittedBox(
                                     child: Text(
-                                      "ACCEPT ORDER",
-                                      style: TextStyle(
+                                      "NEW ORDER REQUEST",
+                                      style: GoogleFonts.poppins(
                                         fontSize: 18,
                                         fontWeight: FontWeight.w900,
                                         letterSpacing: 1.0,
@@ -558,8 +1032,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    "Assignment expires in ${(15 * (1.0 - _timerController.value)).ceil()}s",
-                                    style: TextStyle(
+                                    "Expires in ${(15 * (1.0 - _timerController.value)).ceil()}s",
+                                    style: GoogleFonts.poppins(
                                       fontSize: 11,
                                       color: Colors.grey[500],
                                       fontWeight: FontWeight.bold,
@@ -573,12 +1047,12 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                       },
                     ),
                     const SizedBox(height: 20),
-                    const Text(
-                      "New Delivery Assigned!",
-                      style: TextStyle(
+                    Text(
+                      "New Delivery Request!",
+                      style: GoogleFonts.poppins(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
-                        color: Colors.black54,
+                        color: Colors.black87,
                       ),
                     ),
                   ],
@@ -587,11 +1061,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 
                 _buildPopupInfoRow(
                   icon: Icons.storefront,
-                  color: Colors.orange[700]!,
+                  color: primaryGreen,
                   title: storeName,
                   subtitle: storeAddress,
-                  onTrack: () {
-                    Navigator.of(context).push(
+                  onTrack: () async {
+                    await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => OrderTrackingScreen(
                           order: activeOrder,
@@ -599,6 +1073,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                         ),
                       ),
                     );
+                    if (context.mounted) {
+                      context.read<DriverBloc>().add(const LoadActiveOrders());
+                    }
                   },
                 ),
                 const SizedBox(height: 16),
@@ -609,8 +1086,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                   color: primaryGreen,
                   title: customerName,
                   subtitle: deliveryAddress,
-                  onTrack: () {
-                    Navigator.of(context).push(
+                  onTrack: () async {
+                    await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => OrderTrackingScreen(
                           order: activeOrder,
@@ -618,6 +1095,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                         ),
                       ),
                     );
+                    if (context.mounted) {
+                      context.read<DriverBloc>().add(const LoadActiveOrders());
+                    }
                   },
                 ),
                 const SizedBox(height: 20),
@@ -632,16 +1112,16 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           "Total Order Amount:",
-                          style: TextStyle(fontSize: 14, color: Colors.grey),
+                          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[600]),
                         ),
                         Row(
                           children: [
                             Text(
                               "₹$orderAmount",
-                              style: const TextStyle(
-                                fontSize: 20,
+                              style: GoogleFonts.poppins(
+                                fontSize: 19,
                                 fontWeight: FontWeight.bold,
                                 color: Colors.black87,
                               ),
@@ -656,7 +1136,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                               ),
                               child: Text(
                                 paymentMode,
-                                style: TextStyle(
+                                style: GoogleFonts.poppins(
                                   fontSize: 10,
                                   fontWeight: FontWeight.bold,
                                   color: paymentMode == 'Cash on Delivery' ? Colors.green[800] : Colors.blue[800],
@@ -670,14 +1150,14 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        const Text(
+                        Text(
                           "Your Earnings:",
-                          style: TextStyle(fontSize: 14, color: Colors.grey),
+                          style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[600]),
                         ),
                         Text(
                           "₹$earnings",
-                          style: const TextStyle(
-                            fontSize: 24,
+                          style: GoogleFonts.poppins(
+                            fontSize: 22,
                             fontWeight: FontWeight.bold,
                             color: primaryGreen,
                           ),
@@ -686,7 +1166,63 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                     ),
                   ],
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
+
+                // Explicit ACCEPT and REJECT Buttons
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          _stopOrderRingtone();
+                          final String? orderId = activeOrder['_id'];
+                          final String updatedAt = activeOrder['updatedAt'] ?? '';
+                          if (orderId != null) {
+                            _processedOrders.add('${orderId}_$updatedAt');
+                            context.read<DriverBloc>().add(DeclineOrder(orderId: orderId));
+                          }
+                          _timerController.stop();
+                          setState(() => _showIncomingOrder = false);
+                        },
+                        icon: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                        label: Text("REJECT", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red[600],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 2,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          _stopOrderRingtone();
+                          final String? orderId = activeOrder['_id'];
+                          final String updatedAt = activeOrder['updatedAt'] ?? '';
+                          if (orderId != null) {
+                            _processedOrders.add('${orderId}_$updatedAt');
+                            context.read<DriverBloc>().add(AcceptOrder(orderId: orderId));
+                          }
+                          _timerController.stop();
+                          setState(() => _showIncomingOrder = false);
+                        },
+                        icon: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                        label: Text("ACCEPT", style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 14)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: primaryGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          elevation: 2,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
                 
                 // Slide to Accept Interaction
                 _buildSlideAction(),
@@ -722,11 +1258,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             children: [
               Text(
                 title,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                style: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 15),
               ),
               Text(
                 subtitle,
-                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                style: GoogleFonts.poppins(color: Colors.grey[600], fontSize: 12),
               ),
             ],
           ),
@@ -762,11 +1298,11 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       ),
       child: Stack(
         children: [
-          const Center(
+          Center(
             child: FittedBox(
               child: Text(
                 "Slide Right: Accept | Left: Deny",
-                style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold),
+                style: GoogleFonts.poppins(color: Colors.grey[600], fontWeight: FontWeight.bold, fontSize: 13),
               ),
             ),
           ),
@@ -781,6 +1317,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
 
               if (direction == DismissDirection.startToEnd) {
                 // Accept
+                _stopOrderRingtone();
                 if (orderId != null) {
                   _processedOrders.add(processKey!);
                   context.read<DriverBloc>().add(AcceptOrder(orderId: orderId));
@@ -790,6 +1327,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 return true;
               } else if (direction == DismissDirection.endToStart) {
                 // Deny
+                _stopOrderRingtone();
                 if (orderId != null) {
                   _processedOrders.add(processKey!);
                   context.read<DriverBloc>().add(DeclineOrder(orderId: orderId));
@@ -818,109 +1356,157 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     );
   }
 
-  Widget _buildProfileSection(user) {
-    return InkWell(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const ProfileScreen()),
-        );
-      },
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
+  Widget _buildProfileSection(dynamic user) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.grey[200]!, width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const ProfileScreen()),
+          );
+        },
+        borderRadius: BorderRadius.circular(12),
         child: Row(
-        children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(16),
-              image: user.avatar != null && user.avatar!.isNotEmpty
-                  ? DecorationImage(
-                      image: (user.avatar!.startsWith('http') || kIsWeb)
-                          ? NetworkImage(user.avatar!)
-                          : FileImage(File(user.avatar!)) as ImageProvider,
-                      fit: BoxFit.cover,
-                    )
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: lightGreen,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: primaryGreen.withOpacity(0.2)),
+                image: user.avatar != null && user.avatar!.isNotEmpty
+                    ? DecorationImage(
+                        image: (user.avatar!.startsWith('http') || kIsWeb)
+                            ? NetworkImage(user.avatar!)
+                            : FileImage(File(user.avatar!)) as ImageProvider,
+                        fit: BoxFit.cover,
+                      )
+                    : null,
+              ),
+              child: user.avatar == null || user.avatar!.isEmpty
+                  ? const Icon(Icons.person_rounded, size: 28, color: primaryGreen)
                   : null,
             ),
-            child: user.avatar == null || user.avatar!.isEmpty
-                ? Icon(Icons.person, size: 28, color: Colors.grey[400])
-                : null,
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (user.name != null && user.name.toString().trim().isNotEmpty && user.name.toString().trim() != 'Rider Partner') ? user.name! : (user.phone.isNotEmpty ? user.phone : 'Rider Partner'),
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF2C2C2C),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Icon(Icons.phone_iphone_rounded, size: 13, color: Colors.grey[600]),
+                      const SizedBox(width: 4),
+                      Text(
+                        user.phone ?? '',
+                        style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                  if (user.upi != null && user.upi!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        Icon(Icons.account_balance_wallet_outlined, size: 13, color: primaryGreen),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            'UPI: ${user.upi}',
+                            style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[700], fontWeight: FontWeight.w600),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  user.name ?? 'Driver',
-                  style: GoogleFonts.poppins(
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF1C1C1E),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: lightGreen,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: primaryGreen.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    user.riderId ?? 'RIDER',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                      color: primaryGreen,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  user.phone,
-                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                ),
-                if (user.upi != null && user.upi!.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Row(
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: user.isVerified ? const Color(0xFFE8F5E9) : const Color(0xFFFFF3E0),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: user.isVerified ? const Color(0xFF81C784) : const Color(0xFFFFB74D),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.payment, size: 14, color: primaryGreen.withOpacity(0.8)),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          'UPI ID: ${user.upi}',
-                          style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
+                      Icon(
+                        user.isVerified ? Icons.verified_rounded : Icons.hourglass_top_rounded,
+                        size: 11,
+                        color: user.isVerified ? const Color(0xFF2E7D32) : const Color(0xFFE65100),
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        user.isVerified ? 'Verified' : 'Pending',
+                        style: GoogleFonts.poppins(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w600,
+                          color: user.isVerified ? const Color(0xFF2E7D32) : const Color(0xFFE65100),
                         ),
                       ),
                     ],
                   ),
-                ],
+                ),
               ],
             ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: lightGreen,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              user.riderId ?? 'DRIVER',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: primaryGreen,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
     );
   }
 
   Widget _buildActionButtons() {
+    final authState = context.watch<AuthBloc>().state;
+    final isVerified = authState is Authenticated && authState.user.isVerified;
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Column(
@@ -931,18 +1517,22 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
 
               return AnimatedContainer(
                 duration: const Duration(milliseconds: 300),
-                height: 56,
+                height: 52,
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: isLoading ? null : _toggleOnlineStatus,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _isOnline
-                        ? Colors.orange[700]
-                        : const Color(0xFF111827),
+                    backgroundColor: !isVerified
+                        ? primaryGreen
+                        : (_isOnline ? primaryGreen : darkBlack),
                     foregroundColor: Colors.white,
-                    elevation: 0,
+                    elevation: 2,
+                    shadowColor: (!isVerified
+                            ? primaryGreen
+                            : (_isOnline ? primaryGreen : darkBlack))
+                        .withOpacity(0.3),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(14),
                     ),
                     disabledBackgroundColor: Colors.grey[300],
                   ),
@@ -959,18 +1549,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
-                              _isOnline
-                                  ? Icons.pause_circle
-                                  : Icons.play_circle_filled,
+                              !isVerified
+                                  ? Icons.lock_clock_rounded
+                                  : (_isOnline
+                                      ? Icons.pause_circle_filled_rounded
+                                      : Icons.play_circle_fill_rounded),
                               size: 22,
+                              color: Colors.white,
                             ),
                             const SizedBox(width: 10),
                             Text(
-                              _isOnline ? 'Go Offline' : 'Go Online',
-                              style: const TextStyle(
-                                fontSize: 16,
+                              !isVerified
+                                  ? 'Approval Pending (Locked)'
+                                  : (_isOnline ? 'Go Offline' : 'Go Online'),
+                              style: GoogleFonts.poppins(
+                                fontSize: 15,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 0.5,
+                                color: Colors.white,
                               ),
                             ),
                           ],
@@ -979,61 +1575,33 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               );
             },
           ),
-          if (_isReturning) ...[
-            const SizedBox(height: 12),
-            BlocBuilder<DriverBloc, DriverState>(
-              builder: (context, state) {
-                final isLoading = state is DriverLoading;
-
-                return Container(
-                  height: 56,
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: isLoading ? null : _markReachedStore,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[600],
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      disabledBackgroundColor: Colors.grey[300],
-                    ),
-                    child: isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: const [
-                              Icon(Icons.store_outlined, size: 22),
-                              SizedBox(width: 10),
-                              Text(
-                                'I Reached Store',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                );
-              },
-            ),
-          ],
         ],
       ),
     );
   }
 
   Widget _buildStatsCards() {
+    final authState = context.watch<AuthBloc>().state;
+    final isVerified = authState is Authenticated && authState.user.isVerified;
+
+    String statusText;
+    Color statusColor;
+    Color statusBgColor;
+
+    if (!isVerified) {
+      statusText = 'Pending';
+      statusColor = primaryGreen;
+      statusBgColor = lightGreen;
+    } else if (_isOnline) {
+      statusText = 'Available';
+      statusColor = primaryGreen;
+      statusBgColor = lightGreen;
+    } else {
+      statusText = 'Offline';
+      statusColor = Colors.grey[700]!;
+      statusBgColor = Colors.grey[100]!;
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -1052,9 +1620,9 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             child: _buildStatCard(
               icon: Icons.assignment_outlined,
               title: 'Status',
-              value: _isReturning ? 'Returning' : 'Available',
-              color: _isReturning ? Colors.orange[700]! : Colors.blue[600]!,
-              bgColor: _isReturning ? Colors.orange[50]! : Colors.blue[50]!,
+              value: statusText,
+              color: statusColor,
+              bgColor: statusBgColor,
             ),
           ),
         ],
@@ -1070,18 +1638,18 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         final ordersVal = summary?['orders_completed'] ?? 0;
         final secondsVal = summary?['ride_time_seconds'] ?? 0;
 
-        final String earnings = '₹${earningsVal.toStringAsFixed(2)}';
+        final String earnings = '₹${(earningsVal as num).toDouble().toStringAsFixed(2)}';
         final String orders = ordersVal.toString();
-        final double hoursVal = secondsVal / 3600.0;
+        final double hoursVal = (secondsVal as num) / 3600.0;
         final String hours = '${hoursVal.toStringAsFixed(1)}h';
 
         return Container(
           margin: const EdgeInsets.symmetric(horizontal: 16),
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: lightGreen.withOpacity(0.5), // More green themed
+            color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: primaryGreen.withOpacity(0.2)),
+            border: Border.all(color: primaryGreen.withOpacity(0.25), width: 1.2),
             boxShadow: [
               BoxShadow(
                 color: primaryGreen.withOpacity(0.05),
@@ -1096,10 +1664,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text(
+                  Text(
                     'Today Progress',
-                    style: TextStyle(
-                      fontSize: 16,
+                    style: GoogleFonts.poppins(
+                      fontSize: 15,
                       fontWeight: FontWeight.bold,
                       color: Colors.black87,
                     ),
@@ -1109,39 +1677,68 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                     decoration: BoxDecoration(
                       color: lightGreen,
                       borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: primaryGreen.withOpacity(0.3)),
                     ),
-                    child: Text(
-                      'Live',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: primaryGreen,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: const BoxDecoration(
+                            color: primaryGreen,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Live',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.bold,
+                            color: primaryGreen,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildProgressItem(
-                    icon: Icons.account_balance_wallet_rounded,
-                    label: 'Earnings',
-                    value: earnings,
-                    color: Colors.green,
+                  Expanded(
+                    child: InkWell(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => const RiderWalletScreen()),
+                        );
+                      },
+                      borderRadius: BorderRadius.circular(12),
+                      child: _buildProgressItem(
+                        icon: Icons.account_balance_wallet_rounded,
+                        label: 'Earnings',
+                        value: earnings,
+                        color: primaryGreen,
+                      ),
+                    ),
                   ),
-                  _buildProgressItem(
-                    icon: Icons.shopping_bag_rounded,
-                    label: 'Today Order',
-                    value: orders,
-                    color: primaryGreen,
+                  Expanded(
+                    child: _buildProgressItem(
+                      icon: Icons.shopping_bag_rounded,
+                      label: 'Today Order',
+                      value: orders,
+                      color: primaryGreen,
+                    ),
                   ),
-                  _buildProgressItem(
-                    icon: Icons.timer_rounded,
-                    label: 'Today Hours',
-                    value: hours,
-                    color: Colors.orange[700]!,
+                  Expanded(
+                    child: _buildProgressItem(
+                      icon: Icons.timer_rounded,
+                      label: 'Today Hours',
+                      value: hours,
+                      color: primaryGreen,
+                    ),
                   ),
                 ],
               ),
@@ -1158,38 +1755,37 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     required String value,
     required Color color,
   }) {
-    return Expanded(
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 24),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.1),
+            shape: BoxShape.circle,
           ),
-          const SizedBox(height: 10),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-            ),
+          child: Icon(icon, color: color, size: 22),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: GoogleFonts.poppins(
+            fontSize: 14.5,
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
           ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 11,
-              color: Colors.grey[600],
-              fontWeight: FontWeight.w500,
-            ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.poppins(
+            fontSize: 11,
+            color: Colors.grey[600],
+            fontWeight: FontWeight.w500,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1201,14 +1797,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     required Color bgColor,
   }) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey[200]!, width: 1),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
             offset: const Offset(0, 2),
           ),
         ],
@@ -1216,24 +1813,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
       child: Column(
         children: [
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
-            child: Icon(icon, size: 24, color: color),
+            child: Icon(icon, size: 22, color: color),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Text(
             title,
-            style: TextStyle(
-              fontSize: 12,
+            style: GoogleFonts.poppins(
+              fontSize: 11.5,
               color: Colors.grey[600],
               fontWeight: FontWeight.w500,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             value,
-            style: TextStyle(
-              fontSize: 14,
+            style: GoogleFonts.poppins(
+              fontSize: 13.5,
               fontWeight: FontWeight.bold,
               color: color,
             ),
@@ -1251,34 +1848,46 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: const Text(
+            child: Text(
               'Orders',
-              style: TextStyle(
-                fontSize: 18,
+              style: GoogleFonts.poppins(
+                fontSize: 17,
                 fontWeight: FontWeight.bold,
+                color: Colors.black87,
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           
           // Tab Bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TabBar(
-              isScrollable: false,
-              labelColor: primaryGreen,
-              unselectedLabelColor: Colors.grey,
-              indicatorColor: primaryGreen,
-              indicatorSize: TabBarIndicatorSize.label,
-              labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-              tabs: const [
-                Tab(text: 'Active'),
-                Tab(text: 'Complete'),
-                Tab(text: 'Cancel'),
-              ],
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F3F5),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              padding: const EdgeInsets.all(3),
+              child: TabBar(
+                isScrollable: false,
+                labelColor: Colors.white,
+                unselectedLabelColor: Colors.grey[700],
+                indicator: BoxDecoration(
+                  color: primaryGreen,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                indicatorSize: TabBarIndicatorSize.tab,
+                labelStyle: GoogleFonts.poppins(fontWeight: FontWeight.bold, fontSize: 12),
+                unselectedLabelStyle: GoogleFonts.poppins(fontWeight: FontWeight.w500, fontSize: 12),
+                tabs: const [
+                  Tab(text: 'Active'),
+                  Tab(text: 'Complete'),
+                  Tab(text: 'Cancel'),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
 
           BlocBuilder<DriverBloc, DriverState>(
             builder: (context, state) {
@@ -1313,7 +1922,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
 
               // Default: No orders
               return Padding(
-                padding: const EdgeInsets.only(top: 40),
+                padding: const EdgeInsets.only(top: 20),
                 child: _buildNoOrdersWidget(),
               );
             },
@@ -1324,35 +1933,46 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   }
 
   Widget _buildNoOrdersWidget({String? title}) {
+    final authState = context.read<AuthBloc>().state;
+    final isVerified = authState is Authenticated && authState.user.isVerified;
+
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 60),
+        padding: const EdgeInsets.symmetric(vertical: 40),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(24),
+              padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 color: Colors.grey[100],
                 shape: BoxShape.circle,
               ),
-              child: Icon(Icons.inbox_outlined, size: 48, color: Colors.grey[400]),
+              child: Icon(
+                !isVerified ? Icons.lock_clock_outlined : Icons.inbox_outlined,
+                size: 40,
+                color: !isVerified ? primaryGreen : Colors.grey[400],
+              ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
             Text(
-              title ?? (_isOnline ? 'No active orders' : 'Go online to receive orders'),
+              title ?? (!isVerified
+                  ? 'Your profile is under review by Admin'
+                  : (_isOnline ? 'No active orders right now' : 'Go online to receive nearby orders')),
               textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 16,
+              style: GoogleFonts.poppins(
+                fontSize: 14,
                 color: Colors.grey[600],
                 fontWeight: FontWeight.w500,
               ),
             ),
             if (!_isOnline && title == null) ...[
-              const SizedBox(height: 8),
-              const Text(
-                'You are currently offline',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
+              const SizedBox(height: 6),
+              Text(
+                !isVerified
+                    ? 'Orders will be available once Admin approves'
+                    : 'You are currently offline',
+                style: GoogleFonts.poppins(fontSize: 11, color: Colors.grey[400]),
               ),
             ],
           ],
@@ -1372,7 +1992,7 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.only(left: 16, right: 16, bottom: 250),
+      padding: const EdgeInsets.only(left: 16, right: 16, bottom: 20),
       shrinkWrap: true,
       physics: const BouncingScrollPhysics(),
       itemCount: orders.length,
@@ -1384,18 +2004,24 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
   }
 
   Widget _buildOrderCard(Map<String, dynamic> order, {bool isHistorical = false}) {
+    final storeName = order['store']?['name'] ?? order['restaurant']?['name'] ?? 'FreshNow Store';
+    final rawCustAddr = _parseAddressToString(
+      order['deliveryAddress'] ?? order['address'] ?? order['customer']?['address']
+    );
+    final customerAddress = rawCustAddr.isNotEmpty ? rawCustAddr : 'Customer Address';
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[200]!),
+        border: Border.all(color: Colors.grey[200]!, width: 1),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -1408,146 +2034,79 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
             children: [
               Expanded(
                 child: Text(
-                  "Order #${order['orderNumber'] ?? 'N/A'}",
-                  style: const TextStyle(
-                    fontSize: 12,
+                  "Order #${order['orderNumber'] ?? order['orderId'] ?? order['_id'] ?? 'N/A'}",
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
                     fontWeight: FontWeight.bold,
+                    color: Colors.black87,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              // Removed QR Code for Payments as requested
               _buildStatusBadge(order['deliveryStatus'] ?? 'PENDING'),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           const Divider(height: 1),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
           // Restaurant Pick-up and Amount
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Icon(Icons.storefront_outlined, size: 20, color: Colors.grey[600]),
-                  const SizedBox(width: 12),
-                  Text(
-                    order['restaurant']?['name'] ?? 'FreshNow Store',
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.orange[50],
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      '${order['restaurant']?['distance_km'] ?? order['store']?['distance_km'] ?? order['distanceKm'] ?? '--'} km',
-                      style: TextStyle(fontSize: 10, color: Colors.orange[800], fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              if (!isHistorical)
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => OrderTrackingScreen(order: order, isToRestaurant: true),
+              Expanded(
+                child: Row(
+                  children: [
+                    Icon(Icons.storefront_outlined, size: 20, color: Colors.grey[600]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        storeName,
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.black87,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange[700],
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-                    minimumSize: const Size(0, 28),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(15),
                     ),
-                  ),
-                  child: const Text(
-                    "Track Pick-up",
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                  ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-
-          // Customer
-          Row(
-            children: [
-              Icon(Icons.person_outline, size: 20, color: Colors.grey[600]),
-              const SizedBox(width: 12),
-              Text(
-                order['customer']?['name'] ?? 'N/A',
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
+                  ],
                 ),
               ),
-              const Spacer(),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
                     "Total: ₹${order['payableAmount'] ?? order['totalAmount'] ?? '0.00'}",
-                    style: const TextStyle(
-                      fontSize: 14,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
                       fontWeight: FontWeight.bold,
                       color: Colors.black87,
                     ),
                   ),
-                  const SizedBox(height: 2),
                   Text(
                     "Earn: ₹${(order['driverEarnings'] ?? order['deliveryCharge'] ?? 50.0).toStringAsFixed(2)}",
-                    style: const TextStyle(
-                      fontSize: 14,
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
                       fontWeight: FontWeight.bold,
                       color: primaryGreen,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[50] : Colors.blue[50],
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[200]! : Colors.blue[200]!),
-                    ),
-                    child: Text(
-                      (order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD' ? 'Cash on Delivery' : 'Online / UPI',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[800] : Colors.blue[800],
-                      ),
                     ),
                   ),
                 ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
           // Address and Tracking
           Row(
             children: [
               Icon(Icons.location_on_outlined, size: 20, color: Colors.grey[600]),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  "${order['deliveryAddress']?['addressLine'] ?? ''}, ${order['deliveryAddress']?['city'] ?? ''}".trim() == ","
-                      ? ((order['customer']?['address'] is String) ? order['customer']['address'] : ((order['address'] is String) ? order['address'] : (order['address']?['fullAddress'] ?? 'N/A')))
-                      : "${order['deliveryAddress']?['addressLine'] ?? ''}, ${order['deliveryAddress']?['city'] ?? ''}",
-                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  customerAddress,
+                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[600]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1555,32 +2114,40 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
               if (!isHistorical) ...[
                 const SizedBox(width: 8),
                 ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
+                  onPressed: () async {
+                    final status = order['deliveryStatus'] ?? 'accepted';
+                    final isToStore = ['accepted', 'assigned', 'reached_store'].contains(status);
+                    await Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => OrderTrackingScreen(order: order),
+                        builder: (_) => OrderTrackingScreen(
+                          order: order,
+                          isToRestaurant: isToStore,
+                        ),
                       ),
                     );
+                    if (context.mounted) {
+                      context.read<DriverBloc>().add(const LoadActiveOrders());
+                    }
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryGreen,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                    minimumSize: const Size(0, 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+                    minimumSize: const Size(0, 30),
                     elevation: 0,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  child: const Text(
-                    "Track Delivery",
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  child: Text(
+                    "Track",
+                    style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
           // Footer: Estimate and Details
           Row(
@@ -1590,27 +2157,38 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
                 children: [
                   Icon(
                     isHistorical ? Icons.history : Icons.access_time,
-                    size: 18,
+                    size: 16,
                     color: isHistorical ? Colors.grey : Colors.blue,
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Text(
-                    isHistorical ? "Completed" : "Estimate: 8 mins",
-                    style: TextStyle(
-                      fontSize: 13,
+                    isHistorical ? "Delivered" : "Estimate: 8-15 mins",
+                    style: GoogleFonts.poppins(
+                      fontSize: 11.5,
                       color: isHistorical ? Colors.grey : Colors.blue[700],
                       fontWeight: FontWeight.w500,
                     ),
                   ),
                 ],
               ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[50] : Colors.blue[50],
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[200]! : Colors.blue[200]!),
+                ),
+                child: Text(
+                  (order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD' ? 'Cash on Delivery' : 'Online / UPI',
+                  style: GoogleFonts.poppins(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.bold,
+                    color: ((order['paymentTransaction'] != null && (order['paymentTransaction']['provider'] == 'cod' || order['paymentTransaction']['provider'] == 'Cash on Delivery')) || order['paymentMethod'] == 'Cash on Delivery' || order['paymentMethod'] == 'COD') ? Colors.green[800] : Colors.blue[800],
+                  ),
+                ),
+              ),
             ],
           ),
-          
-          if (!isHistorical && (order['deliveryStatus'] == 'picked_up' || order['deliveryStatus'] == 'out_for_delivery')) ...[
-            const SizedBox(height: 16),
-            InlineDeliveryOtpForm(order: order),
-          ],
         ],
       ),
     );
@@ -1637,15 +2215,15 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
         status.toUpperCase(),
-        style: TextStyle(
-          fontSize: 11,
+        style: GoogleFonts.poppins(
+          fontSize: 10,
           fontWeight: FontWeight.bold,
           color: textColor,
         ),
@@ -1655,137 +2233,32 @@ class _DriverHomeScreenState extends State<DriverHomeScreen> with SingleTickerPr
 
   Widget _buildErrorWidget(String message) {
     return Padding(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(24),
       child: Column(
         children: [
-          const Icon(
-            Icons.error_outline,
-            size: 60,
-            color: Colors.red,
+          Icon(
+            Icons.error_outline_rounded,
+            size: 48,
+            color: Colors.red[400],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Text(
             message,
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.red, fontSize: 16),
+            style: GoogleFonts.poppins(color: Colors.red[700], fontSize: 13),
           ),
-          const SizedBox(height: 16),
-          ElevatedButton(
+          const SizedBox(height: 14),
+          ElevatedButton.icon(
             onPressed: () => context.read<DriverBloc>().add(
               const LoadActiveOrders(),
             ),
+            icon: const Icon(Icons.refresh_rounded, size: 16, color: Colors.white),
             style: ElevatedButton.styleFrom(
               backgroundColor: primaryGreen,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            child: const Text("Retry"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showPaymentQRDialog(BuildContext context, Map<String, dynamic> order) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Column(
-          children: [
-            const Text(
-              'Accept Payment',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Order #${order['orderNumber']}',
-              style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.grey[300]!),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.qr_code_scanner, size: 200, color: Colors.black),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Scan to Pay via PhonePe',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  Text(
-                    'Total: ₹${order['payableAmount'] ?? order['totalAmount']}',
-                    style: const TextStyle(color: primaryGreen, fontWeight: FontWeight.bold, fontSize: 18),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Wait for customer to scan and complete payment.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ],
-        ),
-        actions: [
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Payment Confirmed!'), backgroundColor: primaryGreen),
-                );
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: primaryGreen,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: const Text('Confirm Payment Received'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showLogoutDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text(
-          'Logout',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: TextStyle(color: Colors.grey[600])),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              context.read<AuthBloc>().add(const LogoutRequested());
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red[600],
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            child: const Text('Logout'),
+            label: Text("Retry", style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -1833,14 +2306,14 @@ class BorderProgressPainter extends CustomPainter {
 
 class InlineDeliveryOtpForm extends StatefulWidget {
   final Map<String, dynamic> order;
-  const InlineDeliveryOtpForm({Key? key, required this.order}) : super(key: key);
+  const InlineDeliveryOtpForm({super.key, required this.order});
 
   @override
-  _InlineDeliveryOtpFormState createState() => _InlineDeliveryOtpFormState();
+  State<InlineDeliveryOtpForm> createState() => _InlineDeliveryOtpFormState();
 }
 
 class _InlineDeliveryOtpFormState extends State<InlineDeliveryOtpForm> {
-  static const Color primaryGreen = Color(0xFF22C55E);
+  static const Color primaryGreen = Color(0xFF248C70);
   
   final TextEditingController _otpController = TextEditingController();
   bool _isSendingOtp = false;
@@ -1849,10 +2322,12 @@ class _InlineDeliveryOtpFormState extends State<InlineDeliveryOtpForm> {
     setState(() => _isSendingOtp = true);
     try {
       final response = await ApiService.sendDeliveryOtp(widget.order['_id'] ?? '');
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(response['message'] ?? 'OTP sent successfully'), backgroundColor: primaryGreen),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString()), backgroundColor: Colors.red),
       );

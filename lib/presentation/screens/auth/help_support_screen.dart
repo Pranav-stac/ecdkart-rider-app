@@ -25,29 +25,29 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
+      backgroundColor: const Color(0xFFF5FAF8),
       appBar: AppBar(
-        title: Text('Help & Support', style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: const Color(0xFF1C1C1E))),
+        title: Text('Help & Support', style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: const Color(0xFF2C2C2C))),
         backgroundColor: Colors.white,
-        foregroundColor: const Color(0xFF1C1C1E),
+        foregroundColor: const Color(0xFF2C2C2C),
         elevation: 0,
         centerTitle: true,
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── Header card ──────────────────────────────────────────────
+          // â”€â”€ Header card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
             decoration: BoxDecoration(
-              color: const Color(0xFF22C55E),
+              color: const Color(0xFF248C70),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Column(
               children: [
                 const Text(
-                  '🎧',
+                  'ðŸŽ§',
                   style: TextStyle(fontSize: 48),
                 ),
                 const SizedBox(height: 12),
@@ -65,7 +65,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                   'Last updated: June 2025',
                   style: GoogleFonts.poppins(
                     fontSize: 13,
-                    color: Colors.white.withOpacity(0.8),
+                    color: Colors.white.withValues(alpha: 0.8),
                   ),
                 ),
               ],
@@ -74,7 +74,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
 
           const SizedBox(height: 20),
 
-          // ── Expandable sections ──────────────────────────────────────
+          // â”€â”€ Expandable sections â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           ...List.generate(_sections.length, (index) {
             final section = _sections[index];
             final isExpanded = _expanded.contains(index);
@@ -86,7 +86,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                 borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 8,
                     offset: const Offset(0, 2),
                   ),
@@ -118,7 +118,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                                 width: 28,
                                 height: 28,
                                 decoration: BoxDecoration(
-                                  color: const Color(0xFF22C55E).withOpacity(0.12),
+                                  color: const Color(0xFF248C70).withValues(alpha: 0.12),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Center(
@@ -127,7 +127,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                                     style: GoogleFonts.poppins(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w700,
-                                      color: const Color(0xFF22C55E),
+                                      color: const Color(0xFF248C70),
                                     ),
                                   ),
                                 ),
@@ -139,7 +139,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                                   style: GoogleFonts.poppins(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w700,
-                                    color: const Color(0xFF111827),
+                                    color: const Color(0xFF2C2C2C),
                                   ),
                                 ),
                               ),
@@ -148,7 +148,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                                 duration: const Duration(milliseconds: 200),
                                 child: const Icon(
                                   Icons.keyboard_arrow_down,
-                                  color: Color(0xFF22C55E),
+                                  color: Color(0xFF248C70),
                                   size: 22,
                                 ),
                               ),
@@ -166,7 +166,7 @@ class _HelpSupportScreenState extends State<HelpSupportScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Divider(
-                                  color: const Color(0xFF22C55E).withOpacity(0.15),
+                                  color: const Color(0xFF248C70).withValues(alpha: 0.15),
                                   height: 1,
                                 ),
                                 const SizedBox(height: 12),

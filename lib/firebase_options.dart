@@ -60,20 +60,20 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyBjEqhW74292IN8fvmycPa6_KLAHdoTbZA',
-    appId: '1:168004879111:ios:f7ce914f9cfc1a2c263ba2',
+    appId: '1:168004879111:ios:403dc34c0c748372263ba2',
     messagingSenderId: '168004879111',
     projectId: 'ecdkart-24dbe',
     storageBucket: 'ecdkart-24dbe.firebasestorage.app',
-    iosBundleId: 'com.ecdkart.rider',
+    iosBundleId: 'com.example.vegboxDriverApp',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBjEqhW74292IN8fvmycPa6_KLAHdoTbZA',
-    appId: '1:168004879111:ios:f7ce914f9cfc1a2c263ba2',
+    appId: '1:168004879111:ios:403dc34c0c748372263ba2',
     messagingSenderId: '168004879111',
     projectId: 'ecdkart-24dbe',
     storageBucket: 'ecdkart-24dbe.firebasestorage.app',
-    iosBundleId: 'com.ecdkart.rider',
+    iosBundleId: 'com.example.vegboxDriverApp',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(

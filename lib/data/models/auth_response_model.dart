@@ -14,9 +14,15 @@ class AuthResponseModel extends Equatable {
 
   factory AuthResponseModel.fromJson(Map<String, dynamic> json) {
     return AuthResponseModel(
-      accessToken: json['token'] ?? json['accessToken'] ?? '',
-      refreshToken: json['refreshToken'] ?? '',
-      user: UserModel.fromJson(json['user']),
+      accessToken: json['token']?.toString() ??
+          json['accessToken']?.toString() ??
+          json['authToken']?.toString() ??
+          json['data']?['token']?.toString() ??
+          '',
+      refreshToken: json['refreshToken']?.toString() ??
+          json['data']?['refreshToken']?.toString() ??
+          '',
+      user: UserModel.fromJson(json),
     );
   }
 

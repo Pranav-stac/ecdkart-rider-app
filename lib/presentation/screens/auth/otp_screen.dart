@@ -7,7 +7,6 @@ import '../../../logic/blocs/auth/auth_bloc.dart';
 import '../../../logic/blocs/auth/auth_event.dart';
 import '../../../logic/blocs/auth/auth_state.dart';
 import '../../widgets/custom_button.dart';
-import '../home/driver_home_screen.dart';
 import 'documentation_screen.dart';
 
 class OtpScreen extends StatefulWidget {

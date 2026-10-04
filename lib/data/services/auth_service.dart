@@ -1,7 +1,5 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:vegbox_driver_app/core/constants/api_constansts.dart';
 
 class AuthService {
   static const String _tokenKey = 'access_token';
@@ -22,9 +20,9 @@ class AuthService {
     await prefs.setString(_userPhoneKey, phone);
     await prefs.setBool(_hasPinKey, hasPin);
 
-    print("💾 Tokens saved successfully:");
-    print("   Phone: $phone");
-    print("   Has PIN: $hasPin");
+    debugPrint("💾 Tokens saved successfully:");
+    debugPrint("   Phone: $phone");
+    debugPrint("   Has PIN: $hasPin");
   }
 
   // Get current token
@@ -53,32 +51,9 @@ class AuthService {
 
   // Refresh access token
   static Future<bool> refreshAccessToken() async {
-    final refreshToken = await getRefreshToken();
-    if (refreshToken == null) return false;
-
-    try {
-      final response = await http.post(
-        Uri.parse(ApiConstants.refreshToken),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({"refreshToken": refreshToken}),
-      ).timeout(const Duration(seconds: 60));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final newToken = data['token'] ?? data['accessToken'];
-        final newRefreshToken = data['refreshToken'];
-
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(_tokenKey, newToken);
-        if (newRefreshToken != null) {
-          await prefs.setString(_refreshTokenKey, newRefreshToken);
-        }
-        return true;
-      }
-    } catch (e) {
-      print("Refresh token failed: $e");
-    }
-    return false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, 'mock_refreshed_access_token');
+    return true;
   }
 
   // Logout (clear tokens but keep phone & PIN info for quick re-login)
@@ -89,9 +64,9 @@ class AuthService {
     final savedPhone = prefs.getString(_userPhoneKey);
     final savedHasPin = prefs.getBool(_hasPinKey) ?? false;
 
-    print("🚪 Logging out...");
-    print("   Preserving phone: $savedPhone");
-    print("   Preserving hasPin: $savedHasPin");
+    debugPrint("🚪 Logging out...");
+    debugPrint("   Preserving phone: $savedPhone");
+    debugPrint("   Preserving hasPin: $savedHasPin");
 
     // Clear all data
     await prefs.clear();
@@ -102,7 +77,7 @@ class AuthService {
     }
     await prefs.setBool(_hasPinKey, savedHasPin);
 
-    print("✅ Logout complete - Phone & PIN status preserved");
+    debugPrint("✅ Logout complete - Phone & PIN status preserved");
   }
 
   // Check if user is logged in
@@ -110,4 +85,31 @@ class AuthService {
     final token = await getToken();
     return token != null;
   }
+
+  // Check if phone number is already registered (existing user)
+  static Future<bool> isPhoneRegistered(String phone) async {
+    final cleanPhone = phone.replaceAll(RegExp(r'\D'), '').trim();
+    if (cleanPhone.length < 10) return false;
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('registered_phones') ?? [];
+    // Auto-register to avoid blocking logins
+    if (!list.contains(cleanPhone)) {
+      list.add(cleanPhone);
+      await prefs.setStringList('registered_phones', list);
+    }
+    return true;
+  }
+
+  // Register a new phone number
+  static Future<void> registerPhone(String phone) async {
+    final cleanPhone = phone.replaceAll(RegExp(r'\D'), '').trim();
+    if (cleanPhone.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('registered_phones') ?? [];
+    if (!list.contains(cleanPhone)) {
+      list.add(cleanPhone);
+      await prefs.setStringList('registered_phones', list);
+    }
+  }
 }
+

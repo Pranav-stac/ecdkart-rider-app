@@ -27,6 +27,17 @@ class DriverBloc extends Bloc<DriverEvent, DriverState> {
     ToggleOnlineStatus event,
     Emitter<DriverState> emit,
   ) async {
+    if (!event.currentUser.isVerified && event.isOnline) {
+      emit(DriverError(
+        message: 'Your profile is under review by Admin. You can go online once approved.',
+        orders: _activeOrders,
+        completedOrders: _completedOrders,
+        cancelledOrders: _cancelledOrders,
+        summaryData: _summaryData,
+      ));
+      return;
+    }
+
     emit(DriverLoading(
       orders: _activeOrders,
       completedOrders: _completedOrders,
@@ -78,36 +89,37 @@ class DriverBloc extends Bloc<DriverEvent, DriverState> {
     MarkReachedStore event,
     Emitter<DriverState> emit,
   ) async {
-    emit(const DriverLoading());
-
-    // try {
-    //   final result = await ApiService.markReachedStore();
-    //   ...
-    // } catch (e) { ... }
-
-    // Logic Bypass for Development: Always succeed
-    await Future.delayed(const Duration(milliseconds: 800));
-
-    final updatedUser = UserModel(
-      id: "mock_id",
-      phone: "9876543210",
-      name: "Mock Driver",
-      role: "driver",
-      isVerified: true,
-      hasPinSet: true,
-      createdAt: DateTime.now(),
-      isOnline: true,
-      isReturning: false,
-    );
-
-    emit(ReachedStoreConfirmed(
-      message: 'Welcome back! You are now available for new orders (Mock)',
-      updatedUser: updatedUser,
+    emit(DriverLoading(
       orders: _activeOrders,
       completedOrders: _completedOrders,
       cancelledOrders: _cancelledOrders,
       summaryData: _summaryData,
     ));
+
+    try {
+      final result = await ApiService.markReachedStore();
+      final updatedUser = event.currentUser?.copyWith(
+        isOnline: true,
+        isReturning: false,
+      );
+
+      emit(ReachedStoreConfirmed(
+        message: result['message'] ?? 'Arrived at store successfully',
+        updatedUser: updatedUser,
+        orders: _activeOrders,
+        completedOrders: _completedOrders,
+        cancelledOrders: _cancelledOrders,
+        summaryData: _summaryData,
+      ));
+    } catch (e) {
+      emit(DriverError(
+        message: 'Failed to update store arrival: $e',
+        orders: _activeOrders,
+        completedOrders: _completedOrders,
+        cancelledOrders: _cancelledOrders,
+        summaryData: _summaryData,
+      ));
+    }
   }
 
   // Update driver location
@@ -165,46 +177,65 @@ class DriverBloc extends Bloc<DriverEvent, DriverState> {
 
       if (activeResponse['success'] == true && activeResponse['data'] != null) {
         final data = activeResponse['data'];
-        if (data['order'] != null) {
-           final Map<String, dynamic> orderObj = Map<String, dynamic>.from(data['order']);
-           if (data['restaurant'] != null) {
-             orderObj['restaurant'] = data['restaurant'];
-           }
-           if (data['customer'] != null) {
-             orderObj['customer'] = data['customer'];
-           }
-           newActiveOrders.add(orderObj);
+        if (data is List) {
+          for (var item in data) {
+            if (item is Map) {
+              newActiveOrders.add(Map<String, dynamic>.from(item));
+            }
+          }
+        } else if (data is Map) {
+          if (data['order'] != null && data['order'] is Map) {
+            final Map<String, dynamic> orderObj = Map<String, dynamic>.from(data['order']);
+            if (data['restaurant'] != null) {
+              orderObj['restaurant'] = data['restaurant'];
+            }
+            if (data['customer'] != null) {
+              orderObj['customer'] = data['customer'];
+            }
+            newActiveOrders.add(orderObj);
+          } else if (data['orders'] != null && data['orders'] is List) {
+            for (var item in (data['orders'] as List)) {
+              if (item is Map) {
+                newActiveOrders.add(Map<String, dynamic>.from(item));
+              }
+            }
+          }
         }
       }
 
       if (historyResponse['success'] == true && historyResponse['data'] != null) {
         final data = historyResponse['data'];
-        if (data['orders'] != null && data['orders'] is List) {
-          final List<dynamic> rawOrders = data['orders'] as List;
-          final List<dynamic> normalizedOrders = [];
-          
-          for (var o in rawOrders) {
-            final Map<String, dynamic> normalized = Map<String, dynamic>.from(o);
-            // Normalize status and active flags
-            normalized['deliveryStatus'] = o['status'] ?? 'delivered';
-            normalized['_id'] = o['orderId'] ?? o['_id'] ?? '';
-            
-            // Normalize amounts
-            final amount = o['customer']?['payableAmount'] ?? o['payableAmount'] ?? o['totalAmount'] ?? 0.0;
-            normalized['totalAmount'] = amount;
-            normalized['payableAmount'] = amount;
-            
-            // Normalize address object
-            normalized['deliveryAddress'] = {
-              'addressLine': o['customer']?['address'] ?? '',
-              'city': o['customer']?['city'] ?? 'Indore',
-            };
-            normalizedOrders.add(normalized);
-          }
-          
-          newCompletedOrders = normalizedOrders.where((o) => o['deliveryStatus'] == 'delivered').toList();
-          newCancelledOrders = normalizedOrders.where((o) => o['deliveryStatus'] == 'cancelled' || o['deliveryStatus'] == 'failed').toList();
+        List<dynamic> rawOrders = [];
+        if (data is List) {
+          rawOrders = data;
+        } else if (data is Map && data['orders'] != null && data['orders'] is List) {
+          rawOrders = data['orders'] as List;
         }
+
+        final List<dynamic> normalizedOrders = [];
+        for (var o in rawOrders) {
+          if (o is! Map) continue;
+          final Map<String, dynamic> normalized = Map<String, dynamic>.from(o);
+          // Normalize status and active flags
+          final status = (o['status'] ?? o['deliveryStatus'] ?? 'delivered').toString().toLowerCase();
+          normalized['deliveryStatus'] = status;
+          normalized['_id'] = o['orderId'] ?? o['_id'] ?? '';
+          
+          // Normalize amounts
+          final amount = (o['customer'] is Map ? o['customer']['payableAmount'] : null) ?? o['payableAmount'] ?? o['totalAmount'] ?? 0.0;
+          normalized['totalAmount'] = amount;
+          normalized['payableAmount'] = amount;
+          
+          // Normalize address object
+          normalized['deliveryAddress'] = {
+            'addressLine': (o['customer'] is Map ? o['customer']['address'] : null) ?? o['deliveryAddress'] ?? '',
+            'city': (o['customer'] is Map ? o['customer']['city'] : null) ?? 'Indore',
+          };
+          normalizedOrders.add(normalized);
+        }
+        
+        newCompletedOrders = normalizedOrders.where((o) => o['deliveryStatus'] == 'delivered' || o['deliveryStatus'] == 'completed').toList();
+        newCancelledOrders = normalizedOrders.where((o) => o['deliveryStatus'] == 'cancelled' || o['deliveryStatus'] == 'failed').toList();
       }
 
       if (summaryResponse['success'] == true && summaryResponse['data'] != null) {
@@ -222,13 +253,15 @@ class DriverBloc extends Bloc<DriverEvent, DriverState> {
         summaryData: _summaryData,
       ));
     } catch (e) {
-      emit(DriverError(
-        message: 'Network error: $e',
-        orders: _activeOrders,
-        completedOrders: _completedOrders,
-        cancelledOrders: _cancelledOrders,
-        summaryData: _summaryData,
-      ));
+      if (!event.isSilent) {
+        emit(DriverError(
+          message: 'Network error: $e',
+          orders: _activeOrders,
+          completedOrders: _completedOrders,
+          cancelledOrders: _cancelledOrders,
+          summaryData: _summaryData,
+        ));
+      }
     }
   }
 

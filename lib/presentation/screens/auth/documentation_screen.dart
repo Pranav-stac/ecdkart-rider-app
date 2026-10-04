@@ -82,8 +82,7 @@ class _DocumentationScreenState extends State<DocumentationScreen> {
           _upiController.text.isNotEmpty &&
           _profileImage != null &&
           _aadharFrontImage != null &&
-          _aadharBackImage != null &&
-          _dlImage != null;
+          _aadharBackImage != null;
     });
   }
 
@@ -198,7 +197,7 @@ class _DocumentationScreenState extends State<DocumentationScreen> {
                 ),
                 const SizedBox(height: 16),
                 _buildDocumentUpload(
-                  'Driving License',
+                  'Driving License (Optional)',
                   _dlImage,
                   () => _pickImage('dl'),
                 ),
@@ -218,7 +217,7 @@ class _DocumentationScreenState extends State<DocumentationScreen> {
                               barrierDismissible: false,
                               builder: (context) => const Center(
                                 child: CircularProgressIndicator(
-                                  color: const Color(0xFF22C55E),
+                                  color: Color(0xFF248C70),
                                 ),
                               ),
                             );
@@ -247,7 +246,9 @@ class _DocumentationScreenState extends State<DocumentationScreen> {
                                   if (responseUserJson != null) {
                                     // Decode the updated UserModel returned by backend
                                     final updatedUser = UserModel.fromJson(responseUserJson);
-                                    context.read<AuthBloc>().add(UpdateUserData(user: updatedUser));
+                                    if (context.mounted) {
+                                      context.read<AuthBloc>().add(UpdateUserData(user: updatedUser));
+                                    }
                                   }
 
                                   if (context.mounted) {
